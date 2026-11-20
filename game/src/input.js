@@ -1,125 +1,53 @@
-import { SCREEN } from './config.js';
-import { screenPoint } from './camera.js';
+// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
+// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
+// frames is never lost and never counted twice.
 
-const HELD = new Set([
-  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-  'ShiftLeft', 'ShiftRight', 'Space', 'KeyE', 'KeyF', 'KeyH', 'KeyR',
-]);
+export const ACTION_CONFIRM = 1;
+export const ACTION_PAUSE = 2;
 
-const EDGES = new Set([
-  'KeyE', 'KeyF', 'KeyH', 'KeyR', 'KeyM', 'KeyP', 'Escape', 'Enter',
-  'NumpadEnter', 'Space', 'Digit1', 'Digit2', 'Digit3',
-]);
+const LEFT = new Set(['ArrowLeft', 'KeyA']);
+const RIGHT = new Set(['ArrowRight', 'KeyD']);
+const CONFIRM = new Set(['Space', 'Enter']);
+const PAUSE = new Set(['KeyP', 'Escape']);
 
-export function makeInput(canvas) {
-  const held = new Set();
-  const edges = new Set();
-  const cursor = { x: SCREEN.width / 2 + 120, y: SCREEN.height / 2 };
-  let triggerHeld = false;
-  let triggerEdge = false;
-
-  function locate(event) {
-    const area = canvas.getBoundingClientRect();
-    cursor.x = ((event.clientX - area.left) / Math.max(1, area.width)) * SCREEN.width;
-    cursor.y = ((event.clientY - area.top) / Math.max(1, area.height)) * SCREEN.height;
-  }
+export function createInput(target) {
+  let left = false;
+  let right = false;
+  let actions = 0;
 
   window.addEventListener('keydown', (event) => {
-    if (!HELD.has(event.code) && !EDGES.has(event.code)) return;
-    event.preventDefault();
-    if (!event.repeat) edges.add(event.code);
-    if (HELD.has(event.code)) held.add(event.code);
-  });
-
-  window.addEventListener('keyup', (event) => held.delete(event.code));
-
-  window.addEventListener('blur', reset);
-
-  canvas.addEventListener('pointermove', locate);
-  canvas.addEventListener('pointerdown', (event) => {
-    locate(event);
-    if (event.button === 0) {
-      triggerHeld = true;
-      triggerEdge = true;
-    }
+    if (LEFT.has(event.code)) left = true;
+    else if (RIGHT.has(event.code)) right = true;
+    else if (CONFIRM.has(event.code)) {
+      if (!event.repeat) actions |= ACTION_CONFIRM;
+    } else if (PAUSE.has(event.code)) {
+      if (!event.repeat) actions |= ACTION_PAUSE;
+    } else return;
     event.preventDefault();
   });
-  window.addEventListener('pointerup', (event) => {
-    if (event.button === 0) triggerHeld = false;
+  window.addEventListener('keyup', (event) => {
+    if (LEFT.has(event.code)) left = false;
+    else if (RIGHT.has(event.code)) right = false;
   });
-  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
+  window.addEventListener('blur', () => {
+    left = false;
+    right = false;
+  });
+  target.addEventListener('pointerdown', () => {
+    actions |= ACTION_CONFIRM;
+  });
 
-  function pressed(...codes) {
-    return codes.some((code) => held.has(code));
-  }
-
-  function tapped(code) {
-    if (!edges.has(code)) return false;
-    edges.delete(code);
-    return true;
-  }
-
-  function reset() {
-    held.clear();
-    edges.clear();
-    triggerHeld = false;
-    triggerEdge = false;
-  }
-
-  function sample(camera) {
-    const aim = screenPoint(camera, cursor.x, cursor.y);
-    let slot = 0;
-    if (tapped('Digit1')) slot = 1;
-    else if (tapped('Digit2')) slot = 2;
-    else if (tapped('Digit3')) slot = 3;
-
-    const result = {
-      x: Number(pressed('KeyD', 'ArrowRight')) - Number(pressed('KeyA', 'ArrowLeft')),
-      y: Number(pressed('KeyS', 'ArrowDown')) - Number(pressed('KeyW', 'ArrowUp')),
-      run: pressed('ShiftLeft', 'ShiftRight'),
-      brake: pressed('Space'),
-      fire: triggerHeld,
-      firePressed: triggerEdge,
-      enter: tapped('KeyE'),
-      leave: tapped('KeyF'),
-      horn: tapped('KeyH'),
-      reload: tapped('KeyR'),
-      confirm: tapped('Enter', 'NumpadEnter', 'Space'),
-      pause: tapped('Escape', 'KeyP'),
-      mute: tapped('KeyM'),
-      slot,
-      aimX: aim.x,
-      aimY: aim.y,
-      pointerX: cursor.x,
-      pointerY: cursor.y,
-    };
-    triggerEdge = false;
-    return result;
-  }
-
-  return { sample, reset };
-}
-
-export function idle(overrides = {}) {
   return {
-    x: 0,
-    y: 0,
-    run: false,
-    brake: false,
-    fire: false,
-    firePressed: false,
-    enter: false,
-    leave: false,
-    horn: false,
-    reload: false,
-    confirm: false,
-    pause: false,
-    mute: false,
-    slot: 0,
-    aimX: 0,
-    aimY: 0,
-    pointerX: SCREEN.width / 2,
-    pointerY: SCREEN.height / 2,
-    ...overrides,
+    /** -1 for left, 1 for right, 0 for neither or both. */
+    direction() {
+      return (right ? 1 : 0) - (left ? 1 : 0);
+    },
+    /** The one-shot presses since the last call, as ACTION_* flags. */
+    takeActions() {
+      const taken = actions;
+      actions = 0;
+      return taken;
+    },
   };
 }

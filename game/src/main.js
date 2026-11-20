@@ -1,212 +1,134 @@
-import { TICK } from './config.js';
-import { createWorld } from './world.js';
-import { idle, makeInput } from './input.js';
-import {
-  createRenderer, SCREEN_CONTROLS, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE,
-} from './render.js';
+// Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s steps
+// (several in a slow frame, none in a fast one), and the renderer paints what is there. The game
+// moves between four screens: title, play, paused and game over.
+//
+// ?seed=N fixes the falling pattern. ?shot=start|play|end (with &seed=N) stages that scene
+// instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
+import { BEST_KEY, LIVES, STEP } from './config.js';
+import { createRandom } from './random.js';
+import { createWorld, EVENT_HIT, EVENT_OVER } from './world.js';
+import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
+import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 import { stageShot } from './shots.js';
-import { initAudio, toggleMute } from './audio.js';
-import { applySave, hasSave, readSave, saveGame } from './save.js';
-import { PAUSE_ITEM_COUNT, TITLE_ITEM_COUNT } from './menu.js';
-import { OPENING_LINES } from './story.js';
 
-const MAX_ELAPSED = 0.25;
+/** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
+const MAX_FRAME = 0.25;
+
 const params = new URLSearchParams(window.location.search);
 const shot = params.get('shot');
-const askedSeed = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(askedSeed) ? askedSeed : Math.floor(Math.random() * 4294967296);
+const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
+const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() * 4294967296);
 
 const canvas = document.getElementById('game');
 const status = document.getElementById('status');
-let world = createWorld(seed, { silent: shot !== null });
+const world = createWorld(createRandom(seed));
 const renderer = createRenderer(canvas);
 
-function announce(message) {
-  if (status !== null) status.textContent = message;
+function readBest() {
+  try {
+    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
+  } catch {
+    return 0;
+  }
 }
 
-function runShot() {
-  const screen = stageShot(shot, world);
-  let frames = 0;
+function saveBest(value) {
+  try {
+    window.localStorage.setItem(BEST_KEY, String(value));
+  } catch {
+    // Storage can be off (private windows): the best score then lasts this visit only.
+  }
+}
+
+function runShot(name) {
+  const scene = stageShot(name, world);
+  let painted = 0;
   function paint() {
-    renderer.draw(world, screen);
-    frames += 1;
-    if (frames < 2) requestAnimationFrame(paint);
+    renderer.draw(world.state, scene.screen, scene.best);
+    painted += 1;
+    if (painted < 2) requestAnimationFrame(paint);
     else window.__shotReady = true;
   }
   requestAnimationFrame(paint);
 }
 
 function runGame() {
-  const input = makeInput(canvas);
+  const input = createInput(canvas);
   let screen = SCREEN_TITLE;
-  let returnScreen = SCREEN_PLAY;
+  let best = readBest();
   let accumulator = 0;
   let last = performance.now();
-  let menuWait = 0;
-  let elapsed = 0;
 
-  world.hasSave = hasSave();
-  world.menu.index = world.hasSave ? 1 : 0;
-  announce('Solara Bay. Choose New Game or Continue.');
+  // Screen readers (and anyone watching the page's text) hear the screen changes and each hit.
+  function announce(message) {
+    status.textContent = message;
+  }
 
-  window.addEventListener('keydown', initAudio, { once: true });
-  canvas.addEventListener('pointerdown', initAudio, { once: true });
-
-  function newGame() {
-    world = createWorld(seed);
-    world.openTalk(OPENING_LINES, () => world.notify('Welcome to Solara Bay'));
-    screen = SCREEN_PLAY;
+  function startGame() {
+    world.reset();
     accumulator = 0;
-    announce('New game started. Follow the marker to Cafe Astra.');
-  }
-
-  function continueGame() {
-    const data = readSave();
-    if (data === null) {
-      world.notify('No saved game found');
-      return;
-    }
-    world = createWorld(data.seed ?? seed);
-    applySave(world, data);
-    world.hasSave = true;
     screen = SCREEN_PLAY;
-    accumulator = 0;
-    announce('Saved game loaded.');
+    announce(`Playing. ${LIVES} lives.`);
   }
 
-  function moveMenu(controls, count) {
-    if (menuWait > 0 || controls.y === 0) return;
-    const direction = controls.y > 0 ? 1 : -1;
-    let next = world.menu.index;
-    for (let i = 0; i < count; i += 1) {
-      next = (next + direction + count) % count;
-      if (screen !== SCREEN_TITLE || next !== 1 || world.hasSave) break;
+  function endGame() {
+    screen = SCREEN_OVER;
+    if (world.state.score > best) {
+      best = world.state.score;
+      saveBest(best);
     }
-    world.menu.index = next;
-    menuWait = 0.16;
-    world.sound('ui');
+    announce(`Game over. Score ${world.state.score}. Best ${best}.`);
   }
 
-  function handleMenu(controls) {
-    menuWait = Math.max(0, menuWait - elapsed);
-    if (controls.mute) {
-      initAudio();
-      announce(toggleMute() ? 'Audio muted' : 'Audio on');
-    }
-
-    if (screen === SCREEN_TITLE) {
-      moveMenu(controls, TITLE_ITEM_COUNT);
-      if (!controls.confirm) return;
-      if (world.menu.index === 0) newGame();
-      else if (world.menu.index === 1) continueGame();
-      else {
-        returnScreen = SCREEN_TITLE;
-        screen = SCREEN_CONTROLS;
-      }
-      return;
-    }
-
-    if (screen === SCREEN_CONTROLS) {
-      if (controls.confirm || controls.pause) {
-        screen = returnScreen;
-        announce('Back.');
-      }
-      return;
-    }
-
-    if (screen === SCREEN_PAUSED) {
-      moveMenu(controls, PAUSE_ITEM_COUNT);
-      if (controls.pause) {
-        screen = SCREEN_PLAY;
-        announce('Playing.');
-        return;
-      }
-      if (!controls.confirm) return;
-      const choice = world.menu.index;
-      if (choice === 0) {
-        screen = SCREEN_PLAY;
-        announce('Playing.');
-      } else if (choice === 1) {
-        returnScreen = SCREEN_PAUSED;
-        screen = SCREEN_CONTROLS;
-      } else if (choice === 2) {
-        announce(saveGame(world) ? 'Game saved.' : 'Storage unavailable.');
-        world.notify('Progress saved');
-      } else if (choice === 3) {
-        continueGame();
-        screen = SCREEN_PLAY;
-      } else {
-        world.hasSave = hasSave();
-        world.menu.index = world.hasSave ? 1 : 0;
-        screen = SCREEN_TITLE;
-      }
-      return;
-    }
-
-    if (screen === SCREEN_PLAY && controls.pause) {
-      world.menu.index = 0;
+  function handleActions() {
+    const actions = input.takeActions();
+    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
+    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
       screen = SCREEN_PAUSED;
       announce('Paused.');
+    } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
+      screen = SCREEN_PLAY;
+      announce('Playing.');
     }
   }
 
-  function advanceWorld(controls) {
-    let first = true;
-    while (accumulator >= TICK) {
-      const orders = first ? controls : idle({
-        x: controls.x,
-        y: controls.y,
-        run: controls.run,
-        brake: controls.brake,
-        fire: controls.fire,
-        aimX: controls.aimX,
-        aimY: controls.aimY,
-        pointerX: controls.pointerX,
-        pointerY: controls.pointerY,
-      });
-      world.step(TICK, orders);
-      first = false;
-      accumulator -= TICK;
-      if (screen === SCREEN_OVER && world.endKind === null) {
-        screen = SCREEN_PLAY;
-        announce('Back on the street.');
-      }
+  function step() {
+    if (screen === SCREEN_TITLE) {
+      world.step(STEP, 0, true);
+      return;
     }
+    const events = world.step(STEP, input.direction(), false);
+    if (events & EVENT_OVER) endGame();
+    else if (events & EVENT_HIT) announce(world.state.lives === 1 ? 'Hit. 1 life left.' : `Hit. ${world.state.lives} lives left.`);
   }
 
   function frame(now) {
     requestAnimationFrame(frame);
-    elapsed = Math.min((now - last) / 1000, MAX_ELAPSED);
+    accumulator += Math.min((now - last) / 1000, MAX_FRAME);
     last = now;
-    const controls = input.sample(world.camera);
-    handleMenu(controls);
-
-    if (screen === SCREEN_TITLE) {
-      world.tickHint += elapsed * 60;
-      accumulator = 0;
-    } else if (screen === SCREEN_PLAY || screen === SCREEN_OVER) {
-      accumulator += elapsed;
-      advanceWorld(controls);
-      if (screen === SCREEN_PLAY && world.endKind !== null) {
-        screen = SCREEN_OVER;
-        announce(world.endKind === 'busted' ? 'Busted.' : 'Wasted.');
+    handleActions();
+    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
+      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
+        step();
+        accumulator -= STEP;
       }
-    } else accumulator = 0;
-
-    renderer.draw(world, screen);
+    } else {
+      accumulator = 0;
+    }
+    renderer.draw(world.state, screen, best);
   }
 
+  // Leaving the tab pauses a running game rather than letting blocks fall unseen.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && screen === SCREEN_PLAY) {
       screen = SCREEN_PAUSED;
-      world.menu.index = 0;
       announce('Paused.');
     }
   });
 
+  announce('Block Dodger. Press Space or click to start.');
   requestAnimationFrame(frame);
 }
 
-if (shot !== null) runShot();
+if (shot) runShot(shot);
 else runGame();

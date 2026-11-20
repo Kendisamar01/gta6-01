@@ -1,86 +1,61 @@
-export const TICK = 1 / 60;
+// Every tuning number and colour in one place. The playfield is a fixed 1280x720 logical area;
+// the renderer scales it to the window, so no rule below depends on the screen size.
 
-export const SCREEN = Object.freeze({ width: 1280, height: 720 });
+export const FIELD = { width: 1280, height: 720, groundY: 664 };
 
-export const MAP = Object.freeze({
-  first: 160,
-  step: 220,
-  road: 56,
-  walk: 18,
-  columns: 16,
-  rows: 12,
-  width: 3520,
-  height: 2960,
-  sandLine: 2600,
-  seaLine: 2760,
-});
+/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
+export const STEP = 1 / 60;
 
-export const DAY_SECONDS = 300;
+export const PLAYER = {
+  width: 72,
+  height: 24,
+  speed: 560,
+  invulnerable: 1.5,
+};
 
-export const PALETTE = Object.freeze({
-  sand: '#e8d3a6',
-  sandShade: '#d6bb88',
-  lawn: '#719c58',
-  lawnShade: '#4f7b45',
-  tarmac: '#42464f',
-  tarmacEdge: '#343840',
-  stripe: '#ead9a9',
-  pavement: '#c7c2b0',
-  kerb: '#a39e90',
-  sea: '#2d85a2',
-  seaDeep: '#1d637e',
-  surf: '#e9f3ea',
-  ink: '#16222c',
-  cream: '#f6f2e5',
-  amber: '#ffd06a',
-  coral: '#ef6058',
-  aqua: '#65dce5',
-  mint: '#82d77f',
-});
+export const LIVES = 3;
 
-export const ROOF_COLORS = Object.freeze([
-  '#d9aa7a', '#c99172', '#e5c493', '#b88775', '#d4b1a1', '#a09d90',
-  '#b9a990', '#c5a581', '#aab2aa', '#d8bea0', '#e2d4b7', '#ba997e',
-  '#a8a69c', '#d1a183',
-]);
+export const BLOCK = {
+  minWidth: 40,
+  maxWidth: 110,
+  height: 36,
+  speed: 240,
+  speedPerLevel: 30,
+  speedJitter: 90,
+  interval: 0.55,
+  intervalScale: 0.88,
+  minInterval: 0.14,
+  dodgePoints: 1,
+};
 
-export const TYPEFACE = 'system-ui, -apple-system, "Segoe UI", Arial, sans-serif';
-export const FONT = TYPEFACE;
+export const COIN = {
+  size: 24,
+  speed: 190,
+  speedPerLevel: 14,
+  interval: 1.4,
+  intervalJitter: 0.8,
+  points: 10,
+};
 
-export const CAR_SPECS = Object.freeze({
-  sedan: {
-    label: 'Cinder 6', length: 46, width: 24, maxSpeed: 232, accel: 150,
-    brake: 260, grip: 7.2, turn: 2.6, mass: 1, hp: 100, price: 420, horn: 330,
-  },
-  sports: {
-    label: 'Vega RS', length: 48, width: 23, maxSpeed: 328, accel: 225,
-    brake: 300, grip: 8.4, turn: 3.05, mass: 0.9, hp: 85, price: 950, horn: 520,
-  },
-  taxi: {
-    label: 'Sunfare Cab', length: 49, width: 25, maxSpeed: 205, accel: 140,
-    brake: 240, grip: 6.8, turn: 2.5, mass: 1.15, hp: 110, price: 520, horn: 400,
-  },
-  van: {
-    label: 'Breakwater Van', length: 58, width: 27, maxSpeed: 185, accel: 120,
-    brake: 220, grip: 6.1, turn: 2.2, mass: 1.5, hp: 135, price: 610, horn: 260,
-  },
-  truck: {
-    label: 'Goliath Hauler', length: 74, width: 31, maxSpeed: 165, accel: 95,
-    brake: 190, grip: 5.2, turn: 1.75, mass: 2.4, hp: 180, price: 880, horn: 190,
-  },
-  police: {
-    label: 'Warden Interceptor', length: 50, width: 25, maxSpeed: 282, accel: 195,
-    brake: 285, grip: 8.1, turn: 2.9, mass: 1.15, hp: 125, price: 0, horn: 610,
-  },
-});
+/** Seconds of play per level, and the last level: speeds and spawn rates stop growing there. */
+export const LEVEL = { seconds: 12, max: 12 };
 
-export const GUNS = Object.freeze({
-  fists: Object.freeze({ label: 'Fists', damage: 19, delay: 0.42, reach: 44 }),
-  pistol: Object.freeze({
-    label: 'Sidearm', damage: 34, delay: 0.21, reach: 620, clip: 12, reload: 1.15,
-  }),
-});
+/** How many falling things can exist at once; the pool is allocated once, at boot. */
+export const POOL_SIZE = 64;
 
-export const STAR_STEPS = Object.freeze([0, 34, 82, 148, 236, 340]);
+export const PALETTE = {
+  backdrop: '#11141b',
+  sky: '#1b1f2a',
+  ground: '#2a3040',
+  player: '#4fc3f7',
+  block: '#e5534b',
+  coin: '#f2c94c',
+  panel: '#252b38',
+  text: '#eef1f5',
+  muted: '#8b93a3',
+};
 
-export const SAVE_ID = 'solara-bay/progress-2';
+export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+
+/** Where the best score is kept between visits (this browser only). */
+export const BEST_KEY = 'block-dodger.best';
