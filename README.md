@@ -6,66 +6,64 @@
 
 [Bounty page](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
-Solara Bay is a self-contained top-down crime sandbox. It draws a fictional coastal metropolis with Canvas 2D, then layers traffic, pedestrians, police chases, combat, dialogue-driven jobs and a day/night cycle on top. The whole entry is plain ES modules with no downloads, packages, art files or network calls.
+Solara Bay is an offline, top-down crime sandbox built with plain Canvas 2D and ES modules. A seeded generator lays out a coastal city of six districts, then a 60 Hz simulation fills it with lane-following traffic, wandering pedestrians, wanted stars, police pursuits, shootouts, day/night lighting, and a dialogue-driven campaign. No packages, network calls, or asset downloads are needed.
 
-## Running it
+## Play
 
-Use Node 22 or newer:
+Node 22 or newer is enough:
 
 ```sh
 node serve.ts
 ```
 
-Open `http://localhost:8080`. Add `--port 8081` to serve elsewhere. There is no build step to play.
+Visit `http://localhost:8080`. Pass `--port 9000` to use a different port. There is no build step for playing.
 
-For a packaged submission directory:
+To create a packaged submission folder:
 
 ```sh
 mkdir -p out
 MAKEFUN_OUTPUT_DIR=out node main.ts
 ```
 
-`main.ts` copies `game/` and the four captured screenshots into the output folder, then writes `dossier.json` using the supplied kit helper.
+That copies `game/` and the captured JPEGs into the output folder and writes `dossier.json` with the provided kit helper.
 
 ## Controls
 
-| Key | Action |
+| Input | Action |
 | --- | --- |
-| WASD / arrows | Move, steer, accelerate and brake |
-| Shift | Sprint on foot |
+| WASD / arrows | Move on foot; steer and accelerate in traffic |
+| Shift | Sprint |
 | Mouse | Aim |
-| Left click | Punch or fire the pistol |
-| E | Enter or jack a car; interact with mission markers |
-| F | Exit a car; start a nearby side job |
+| Left click | Punch or fire the sidearm |
+| E | Mission interaction; enter or jack a car; buy paint |
+| F | Start nearby side jobs; leave the current car |
 | Space | Handbrake |
 | H | Horn |
 | R | Reload |
-| 1 / 2 | Fists / pistol |
+| 1 / 2 | Fists / sidearm |
 | Esc or P | Pause |
 | M | Mute |
 
-## Systems
+## What is inside
 
-The seeded city has six districts, a full road grid, intersections, traffic lights, sidewalks, parks, palm-lined beaches and water. Cars have individual size, speed, acceleration and grip values; traffic uses right-hand lanes and stops at signals. Pedestrians wander sidewalks, scatter from gunfire and react to collisions.
+The city generator produces blocks, buildings, parks, lamps, traffic lights, palms, beaches, water, and ten named venues from a single seed. Vehicles have distinct mass, grip, acceleration, and damage; traffic uses lanes and signals while pedestrians flee from danger. Crime escalates through five stars, drawing cruisers, armed officers, and roadblocks; hiding or visiting Hushcoat Body Shop cools the heat.
 
-Crimes generate 1–5 wanted stars. Patrols arrive first, then extra cruisers and roadblocks at higher heat; hiding cools the stars, and a body shop clears them for cash. Combat supports fists, a collectible pistol, reloads, pickups and light hit effects. The campaign has eight original missions with dialogue, markers, rewards and retry, alongside taxi, rampage and delivery side jobs.
+Eight story missions move from a cafe handshake to a final club assault, with original characters, dialogue, checkpoints, payouts, and retries. Taxi fares, rampage targets, and depot deliveries provide repeatable side jobs. Fists, a collectible sidearm, armor, health, cash pickups, particles, skid marks, muzzle flashes, and screen tints cover the action layer.
 
-The HUD carries health, armor, cash, respect, stars, weapon state, objectives, area popups, toasts and a minimap. The pause menu resumes, shows controls, saves, loads or returns to the title. Audio is synthesized live with WebAudio, including a speed-sensitive engine, siren, shots, UI tones and an original loop.
+The HUD shows health, armor, cash, respect, stars, weapon state, objectives, area banners, notices, and a live minimap. The title and pause menus support save/load and controls. All sound is synthesized in WebAudio: engine, siren, gunfire, impacts, UI cues, and an original looping score.
 
 ## Layout
 
-- `game/index.html` — canvas shell.
-- `game/src/main.js` — boot, fixed-step loop, menu routing and shot mode.
-- `game/src/world.js` — simulation state and update order.
-- `game/src/city.js`, `city-render.js` — seeded layout and static city drawing.
+- `game/index.html` — canvas shell and live status region.
+- `game/src/main.js` — boot loop, menu routing, and deterministic shot mode.
+- `game/src/world.js` — state container, simulation order, interactions, respawn.
+- `game/src/city.js` and `city-render.js` — layout generation and static painting.
 - `game/src/vehicles.js`, `traffic.js`, `peds.js`, `entity-render.js` — moving actors.
 - `game/src/wanted.js`, `police.js`, `combat.js` — crime and response.
-- `game/src/missions.js`, `activities.js`, `story.js` — objectives and characters.
-- `game/src/hud.js`, `minimap.js`, `menu.js`, `effects.js`, `environment.js` — interface and presentation.
-- `game/src/input.js`, `camera.js`, `audio.js`, `music.js`, `save.js`, `config.js`, `random.js`, `shots.js` — support systems.
-- `main.ts`, `serve.ts`, `shots.json`, `capture-shots.mjs` — packaging, serving and screenshot capture.
-- `screenshots/` — the four reviewed JPEG frames.
+- `game/src/story.js`, `missions.js`, `activities.js` — characters and objectives.
+- `game/src/hud.js`, `minimap.js`, `menu.js`, `render.js` — interface and compositor.
+- `game/src/effects.js`, `environment.js`, `audio.js`, `music.js`, `save.js` — feedback systems.
+- `game/src/config.js`, `random.js`, `camera.js`, `input.js`, `shots.js` — support utilities.
+- `main.ts`, `serve.ts`, `shots.json`, `capture-shots.mjs`, `screenshots/` — packaging and capture.
 
-## How it was built
-
-Every module was written for this brief from scratch. A fixed 60 Hz update moves deterministic systems, while a separate renderer culls and paints the 1280×720 view. City geometry comes from a seeded generator, so the same seed recreates the same streets and the four `?shot=` scenes can be captured repeatedly. Screenshots are produced by running the real game in the supplied headless Chrome, not by drawing mock images.
+Every module was written for this entry. The four reviewed frames come from running the real game in headless Chrome with fixed seeds and `?shot=` queries, so they can be reproduced exactly.

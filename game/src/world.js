@@ -1,161 +1,351 @@
-import { createRandom, clamp } from './random.js';
-import { createCity, districtAt, streetName, nearestRoad, shopAt, resolveCircle } from './city.js';
-import { createCamera, updateCamera, addShake } from './camera.js';
-import { neutralControls } from './input.js';
-import { createEffects, updateEffects, addFlash, emit } from './effects.js';
+import { MAP, PALETTE } from './config.js';
+import { makeRandom, limit } from './random.js';
 import {
-  createWanted, updateWanted, reportCrime, setWantedLevel, clearWanted, tryPayNSpray,
+  clearOfBuildings, closestLane, districtAt, generateCity, shopByKind, streetAt,
+} from './city.js';
+import { followCamera, kickCamera, makeCamera } from './camera.js';
+import { idle } from './input.js';
+import { makeEffects, screenTint, spray, stepEffects } from './effects.js';
+import {
+  buyPaintJob, clearHeat, coolWanted, makeWanted, reportCrime,
 } from './wanted.js';
 import {
-  spawnVehicle, findVehicle, nearestVehicle, updateVehicle, ejectDriver,
-  randomParkedCar, vehicleSpec, resolveVehicleCollisions,
+  carById, carNearby, crashCars, driveCar, evictDriver, parkedCar,
 } from './vehicles.js';
-import { maintainTraffic, updateTraffic } from './traffic.js';
-import { maintainPeds, updatePeds, spawnPed, damagePed, alertPeds } from './peds.js';
-import { updatePolice, clearPoliceUnits, spawnPoliceUnit, spawnRoadblock } from './police.js';
+import { keepTraffic, moveTraffic } from './traffic.js';
+import { keepPeds, movePeople, newPed } from './peds.js';
+import { movePolice, recallUnits } from './police.js';
 import {
-  fireBullet, updateBullets, firePlayerWeapon, updateWeapon, startReload,
-  updatePickups, spawnPickup,
+  beginReload, dropPickup, fireWeapon, shoot, tickBullets, tickPickups, tickWeapon,
 } from './combat.js';
-import { createMissionState, updateMissions, nextMissionMarker, onMissionPedKilled } from './missions.js';
-import { createActivityState, updateActivities, onActivityPedKilled, activityMarkers } from './activities.js';
+import { makeMission, moveStory, storyKill, storyPinAt } from './missions.js';
+import { makeSide, moveSide, sideKill, sideMarkers } from './activities.js';
 import { createMusic, updateMusic } from './music.js';
+import { advanceDay } from './environment.js';
 import { setEngine, setSiren, sfx } from './audio.js';
-import { updateTime } from './environment.js';
-import { INTRO_DIALOGUE } from './story.js';
 
 export function createWorld(seed, options = {}) {
-  const random = createRandom(seed);
-  const city = createCity(seed);
-  const start = shopAt(city, 'cafe') ?? { x: 1590, y: 1150 };
+  const rng = makeRandom(seed);
+  const city = generateCity(seed);
+  const cafe = shopByKind(city, 'cafe') ?? { x: 1600, y: 1200 };
   const player = {
-    x: start.x,
-    y: start.y + 16,
+    x: cafe.x + 18,
+    y: cafe.y + 26,
     angle: 0,
-    aimX: start.x + 100,
-    aimY: start.y + 16,
+    aimX: cafe.x + 200,
+    aimY: cafe.y + 26,
     hp: 100,
     armor: 0,
-    money: 260,
+    money: 280,
     respect: 0,
     weapon: 'fists',
-    hasPistol: false,
+    hasGun: false,
     ammo: 0,
     reserve: 0,
-    fireCooldown: 0,
-    reloading: 0,
-    invulnerable: 0,
-    inVehicle: null,
+    fireClock: 0,
+    reloadClock: 0,
+    muzzle: 0,
+    guard: 0,
+    carId: null,
     dead: false,
   };
-  const camera = createCamera(player.x, player.y);
   const world = {
     seed,
-    random,
-    city,
+    rng,
     nextId: 1,
-    time: 0,
-    timeOfDay: 0.42,
-    stepHint: 0,
-    silent: options.silent === true,
+    city,
+    camera: makeCamera(player.x, player.y),
     player,
-    camera,
-    wanted: createWanted(),
-    effects: createEffects(),
-    mission: createMissionState(),
-    activity: createActivityState(),
+    wanted: makeWanted(),
+    mission: makeMission(),
+    activity: makeSide(),
+    effects: makeEffects(),
     vehicles: [],
     peds: [],
     bullets: [],
-    pickups: [],
-    roadblocks: [],
+    loot: [],
+    barriers: [],
     toasts: [],
     dialogue: null,
-    endKind: null,
-    endLoss: 0,
-    respawnTimer: 0,
     area: {
       name: districtAt(player.x, player.y),
-      street: streetName('h', 5),
+      street: streetAt('h', 4),
       life: 0,
       last: '',
     },
     menu: { index: 0 },
-    storyMarker: null,
-    trafficTimer: 0,
-    pedTimer: 0,
-    roadblockTimer: 16,
+    storyPin: null,
+    endKind: null,
+    endLoss: 0,
+    respawnTimer: 0,
+    time: 0,
+    tickHint: 0,
+    dayClock: 0.36,
+    flowClock: 0,
+    pedClock: 0,
+    blockClock: 14,
+    silent: options.silent === true,
+    hasSave: false,
     music: createMusic(),
-    controls: neutralControls(),
   };
 
-  world.toast = (message) => {
+  world.notify = (message) => {
     world.toasts.push({
       text: message,
       life: 3.6,
-      maxLife: 3.6,
-      width: Math.min(430, Math.max(240, message.length * 8.4 + 34)),
+      width: limit(message.length * 8.6 + 36, 250, 470),
     });
     if (world.toasts.length > 4) world.toasts.shift();
   };
 
-  world.sfx = (name, parameter) => {
+  world.sound = (name, parameter = 0) => {
     if (!world.silent) sfx(name, parameter);
   };
 
-  world.reportCrime = (amount, label) => reportCrime(world, amount, label);
-  world.setWantedLevel = (level, reason) => setWantedLevel(world, level, reason);
-  world.spawnPed = (x, y, mode, type) => spawnPed(world, x, y, mode, type);
-  world.fireBullet = (bullet) => fireBullet(world, bullet);
-  world.openDialogue = (lines, onClose) => {
-    world.dialogue = { lines, index: 0, onClose: onClose ?? null };
+  world.crime = (amount, label = '') => reportCrime(world, amount, label);
+  world.shoot = (bullet) => shoot(world, bullet);
+  world.spawnPerson = (x, y, posture = 'walk') => newPed(world, x, y, posture, 'civilian');
+  world.openTalk = (lines, after = null) => {
+    world.dialogue = { lines, line: 0, after };
   };
-  world.clearWantedForMission = () => {
-    clearWanted(world, 'Mission complete');
-    clearPoliceUnits(world);
+  world.personDown = (person) => {
+    storyKill(world, person);
+    sideKill(world, person);
   };
-  world.onPedKilled = (ped) => {
-    onMissionPedKilled(world, ped);
-    onActivityPedKilled(world, ped);
+  world.clearHeatAfterMission = () => {
+    clearHeat(world, 'Mission complete');
+    recallUnits(world);
+    world.barriers.length = 0;
   };
-  world.damagePlayer = (amount, source) => damagePlayer(world, amount, source);
-  world.bustPlayer = () => bustPlayer(world);
+  world.hurtPlayer = (amount, source = '') => hurtPlayer(amount, source);
+  world.arrestPlayer = () => bust();
 
-  for (let i = 0; i < 20; i += 1) randomParkedCar(world);
-  maintainTraffic(world);
-  maintainPeds(world);
+  for (let i = 0; i < 18; i += 1) parkedCar(world);
+  keepTraffic(world);
+  keepPeds(world);
 
-  const supply = [
-    { type: 'pistol', shop: 'rampage' },
-    { type: 'armor', shop: 'hospital' },
-    { type: 'health', shop: 'safehouse' },
-    { type: 'cash', shop: 'delivery' },
-    { type: 'pistol', x: 3080, y: 1860 },
-    { type: 'armor', x: 660, y: 1760 },
+  const supplies = [
+    ['pistol', 'rampage'],
+    ['armor', 'hospital'],
+    ['health', 'safehouse'],
+    ['cash', 'delivery'],
   ];
-  for (const item of supply) {
-    const place = item.shop ? shopAt(city, item.shop) : item;
-    if (place) spawnPickup(world, item.type, place.x + 26, place.y + 24);
+  for (const [kind, venue] of supplies) {
+    const shop = shopByKind(city, venue);
+    if (shop) dropPickup(world, kind, shop.x + 26, shop.y + 24);
   }
-  world.storyMarker = nextMissionMarker(world);
+  dropPickup(world, 'pistol', 3040, 1840);
+  dropPickup(world, 'armor', 680, 1760);
+  world.storyPin = storyPinAt(world);
 
-  function followCamera(dt) {
-    let leadX = 0;
-    let leadY = 0;
-    if (player.inVehicle !== null) {
-      const car = findVehicle(world, player.inVehicle);
-      if (car) {
-        leadX = Math.cos(car.angle) * car.speed * 0.34;
-        leadY = Math.sin(car.angle) * car.speed * 0.34;
+  function cameraLead() {
+    if (player.carId === null) return { x: 0, y: 0 };
+    const car = carById(world, player.carId);
+    if (car === null) return { x: 0, y: 0 };
+    return { x: Math.cos(car.angle) * car.velocity * 0.32, y: Math.sin(car.angle) * car.velocity * 0.32 };
+  }
+
+  function follow(dt) {
+    const lead = cameraLead();
+    followCamera(world.camera, world, dt, lead.x, lead.y);
+  }
+
+  function movePlayer(controls, dt) {
+    player.guard = Math.max(0, player.guard - dt);
+    player.aimX = controls.aimX;
+    player.aimY = controls.aimY;
+
+    if (player.carId !== null) {
+      const car = carById(world, player.carId);
+      if (car === null) {
+        player.carId = null;
+      } else {
+        driveCar(world, car, {
+          gas: -controls.y,
+          wheel: controls.x,
+          handbrake: controls.brake,
+          horn: controls.horn,
+        }, dt);
+        player.x = car.x;
+        player.y = car.y;
+        player.angle = Math.atan2(player.aimY - player.y, player.aimX - player.x);
+        return;
       }
     }
-    updateCamera(camera, { ...player, stepHint: world.stepHint }, dt, leadX, leadY);
+
+    let dx = controls.x;
+    let dy = controls.y;
+    const length = Math.hypot(dx, dy);
+    if (length > 1) {
+      dx /= length;
+      dy /= length;
+    }
+    const pace = controls.run ? 216 : 138;
+    const landing = clearOfBuildings(
+      city,
+      player.x + dx * pace * dt,
+      player.y + dy * pace * dt,
+      9,
+    );
+    player.x = landing.x;
+    player.y = landing.y;
+    player.angle = Math.atan2(player.aimY - player.y, player.aimX - player.x);
   }
 
-  function step(dt, controls = neutralControls()) {
-    world.stepHint += dt * 60;
+  function nearMarker() {
+    if (world.storyPin !== null
+      && Math.hypot(world.storyPin.x - player.x, world.storyPin.y - player.y) < 100) return true;
+    if (world.activity.active) return false;
+    return sideMarkers(world).some((marker) => (
+      Math.hypot(marker.x - player.x, marker.y - player.y) < 110
+    ));
+  }
+
+  function handleInteractions(controls) {
+    if (controls.enter && player.carId !== null) {
+      buyPaintJob(world);
+      return;
+    }
+    if (controls.enter) {
+      const car = carNearby(world, player.x, player.y, 78);
+      if (car === null) return;
+      if (car.driver && car.driver.type !== 'player') {
+        evictDriver(world, car);
+        world.crime(22, 'Carjacking');
+      }
+      car.driver = { type: 'player' };
+      car.siren = car.kind === 'police';
+      player.carId = car.id;
+      player.x = car.x;
+      player.y = car.y;
+      world.notify(`Entered the car`);
+      world.sound('carEnter');
+      return;
+    }
+    if (!controls.leave || player.carId === null) return;
+    const car = carById(world, player.carId);
+    if (car === null) {
+      player.carId = null;
+      return;
+    }
+    const side = car.angle + Math.PI / 2;
+    const spot = clearOfBuildings(
+      city,
+      car.x + Math.cos(side) * 34,
+      car.y + Math.sin(side) * 34,
+      10,
+    );
+    car.driver = null;
+    player.carId = null;
+    player.x = spot.x;
+    player.y = spot.y;
+    world.notify('Left the car');
+    world.sound('carEnter');
+  }
+
+  function hurtPlayer(amount, source) {
+    if (player.dead || player.guard > 0) return;
+    let wound = amount;
+    if (player.armor > 0) {
+      const soaked = Math.min(player.armor, amount * 0.62);
+      player.armor -= soaked;
+      wound -= soaked;
+    }
+    player.hp -= wound;
+    player.guard = 0.32;
+    screenTint(world, '#d85048', 0.12, 0.16);
+    kickCamera(world.camera, 6);
+    spray(world, 'spark', player.x, player.y, 4, {
+      scatter: 1.4, color: PALETTE.coral, size: 2.5, life: 0.3,
+    });
+    world.sound('hit');
+    if (player.hp <= 0) {
+      player.hp = 0;
+      waste();
+    } else if (source === 'police') world.notify('Officer fired at you');
+  }
+
+  function waste() {
+    player.dead = true;
+    player.carId = null;
+    world.endLoss = Math.round(player.money * 0.12);
+    player.money -= world.endLoss;
+    world.endKind = 'wasted';
+    world.respawnTimer = 2.6;
+    clearHeat(world, 'Wasted');
+    recallUnits(world);
+    world.barriers.length = 0;
+    screenTint(world, '#8b1f1f', 0.5, 0.8);
+    world.sound('fail');
+  }
+
+  function bust() {
+    if (player.dead) return;
+    player.dead = true;
+    player.carId = null;
+    world.endLoss = Math.round(player.money * 0.25);
+    player.money -= world.endLoss;
+    world.endKind = 'busted';
+    world.respawnTimer = 2.6;
+    clearHeat(world, 'Busted');
+    recallUnits(world);
+    world.barriers.length = 0;
+    screenTint(world, '#294a8c', 0.4, 0.6);
+    world.sound('fail');
+  }
+
+  function respawn() {
+    const clinic = shopByKind(city, 'hospital') ?? { x: 1600, y: 1360 };
+    player.x = clinic.x + 18;
+    player.y = clinic.y + 26;
+    player.hp = 100;
+    player.armor = 0;
+    player.guard = 2;
+    player.dead = false;
+    player.carId = null;
+    world.endKind = null;
+    world.respawnTimer = 0;
+    world.camera.x = player.x;
+    world.camera.y = player.y;
+    world.notify('Back on the street');
+  }
+
+  function updateArea() {
+    const name = districtAt(player.x, player.y);
+    if (name === world.area.last) return;
+    world.area.last = name;
+    world.area.name = name;
+    const lane = closestLane(player.x, player.y);
+    world.area.street = streetAt(lane.axis, lane.index);
+    world.area.life = 3.2;
+  }
+
+  function updateAudio(dt) {
+    if (world.silent) return;
+    let engineSpeed = 0;
+    let driving = false;
+    if (player.carId !== null) {
+      const car = carById(world, player.carId);
+      if (car !== null) {
+        engineSpeed = car.velocity;
+        driving = true;
+      }
+    }
+    let close = 0;
+    for (const car of world.vehicles) {
+      if (car.driver?.type !== 'officer' || !car.siren) continue;
+      const away = Math.hypot(car.x - player.x, car.y - player.y);
+      if (away < 700) close = Math.max(close, 1 - away / 700);
+    }
+    setEngine(engineSpeed, driving);
+    setSiren(close > 0, close, world.time * 7);
+    updateMusic(world.music, dt, world.dayClock);
+  }
+
+  function step(dt, controls = idle()) {
+    world.tickHint += dt * 60;
     world.time += dt;
-    updateTime(world, dt);
+    advanceDay(world, dt);
 
     for (let i = world.toasts.length - 1; i >= 0; i -= 1) {
       world.toasts[i].life -= dt;
@@ -165,220 +355,39 @@ export function createWorld(seed, options = {}) {
 
     if (player.dead) {
       world.respawnTimer -= dt;
-      updateEffects(world, dt);
-      followCamera(dt);
-      if (world.respawnTimer <= 0 && controls.confirm) respawn(world);
+      stepEffects(world, dt);
+      follow(dt);
+      if (world.respawnTimer <= 0 && controls.confirm) respawn();
       return;
     }
 
     movePlayer(controls, dt);
-    if (controls.reload) startReload(world);
-    if (controls.weaponSlot === 1) player.weapon = 'fists';
-    if (controls.weaponSlot === 2 && player.hasPistol) player.weapon = 'pistol';
+    if (controls.slot === 1) player.weapon = 'fists';
+    else if (controls.slot === 2 && player.hasGun) player.weapon = 'pistol';
+    if (controls.reload) beginReload(world);
 
     if (!world.dialogue) {
-      firePlayerWeapon(world, controls);
-      if (!markerWithinReach(world)) handleInteractions(controls);
+      if (!nearMarker()) handleInteractions(controls);
+      fireWeapon(world, controls);
     }
-
-    updateWeapon(world, dt);
-    updateTraffic(world, dt);
-    updatePolice(world, dt);
-    updatePeds(world, dt);
-    updateMissions(world, dt, controls);
-    updateActivities(world, dt, controls);
-    updateBullets(world, dt);
-    updatePickups(world, dt);
-    resolveVehicleCollisions(world);
-    updateWanted(world, dt);
-    updateEffects(world, dt);
+    tickWeapon(world, dt);
+    moveTraffic(world, dt);
+    movePolice(world, dt);
+    movePeople(world, dt);
+    moveStory(world, dt, controls);
+    moveSide(world, dt, controls);
+    crashCars(world);
+    tickBullets(world, dt);
+    tickPickups(world, dt);
+    coolWanted(world, dt);
+    stepEffects(world, dt);
     updateArea();
-    world.storyMarker = nextMissionMarker(world);
-    followCamera(dt);
+    world.storyPin = storyPinAt(world);
+    follow(dt);
     updateAudio(dt);
-  }
-
-  function movePlayer(controls, dt) {
-    player.invulnerable = Math.max(0, player.invulnerable - dt);
-    player.aimX = controls.aimX;
-    player.aimY = controls.aimY;
-
-    if (player.inVehicle !== null) {
-      const car = findVehicle(world, player.inVehicle);
-      if (!car || !car.alive) {
-        player.inVehicle = null;
-      } else {
-        player.x = car.x;
-        player.y = car.y;
-        player.angle = Math.atan2(player.aimY - player.y, player.aimX - player.x);
-        updateVehicle(world, car, {
-          throttle: -controls.y,
-          steer: controls.x,
-          handbrake: controls.handbrake,
-          horn: controls.horn,
-        }, dt);
-        return;
-      }
-    }
-
-    let dx = controls.x;
-    let dy = controls.y;
-    const length = Math.hypot(dx, dy);
-    if (length > 1) { dx /= length; dy /= length; }
-    const speed = controls.run ? 216 : 138;
-    const next = resolveCircle(city, player.x + dx * speed * dt, player.y + dy * speed * dt, 9);
-    player.x = next.x;
-    player.y = next.y;
-    player.angle = Math.atan2(player.aimY - player.y, player.aimX - player.x);
-  }
-
-  function handleInteractions(controls) {
-    if (!controls.interact && !controls.interactAlt) return;
-    if (controls.interact && tryPayNSpray(world)) return;
-
-    if (player.inVehicle !== null) {
-      const car = findVehicle(world, player.inVehicle);
-      if (car) {
-        const side = car.angle + Math.PI / 2;
-        const spot = resolveCircle(city, car.x + Math.cos(side) * 32, car.y + Math.sin(side) * 32, 10);
-        player.x = spot.x;
-        player.y = spot.y;
-        car.driver = null;
-        world.toast(`Left the ${vehicleSpec(car).label}`);
-      }
-      player.inVehicle = null;
-      return;
-    }
-
-    const car = nearestVehicle(world, player.x, player.y, 74);
-    if (car === null) return;
-    if (car.driver && car.driver.type !== 'player') {
-      ejectDriver(world, car);
-      world.reportCrime(22, 'Carjacking');
-      world.toast(`Jacked the ${vehicleSpec(car).label}`);
-    } else {
-      world.toast(`Entered the ${vehicleSpec(car).label}`);
-    }
-    car.driver = { type: 'player' };
-    car.ai = null;
-    car.siren = car.type === 'police';
-    player.inVehicle = car.id;
-    player.x = car.x;
-    player.y = car.y;
-    world.sfx('carEnter');
-  }
-
-  function damagePlayer(amount, source) {
-    if (player.dead || player.invulnerable > 0) return;
-    let remaining = amount;
-    if (player.armor > 0) {
-      const blocked = Math.min(player.armor, amount * 0.62);
-      player.armor -= blocked;
-      remaining -= blocked;
-    }
-    player.hp -= remaining;
-    player.invulnerable = 0.32;
-    addFlash(world, '#d34d45', 0.12, 0.16);
-    addShake(camera, 6);
-    emit(world, 'spark', player.x, player.y, 3, {
-      spread: 1.4, color: '#ff8f7c', size: 2.4, life: 0.3,
-    });
-    world.sfx('hit');
-    if (player.hp <= 0) {
-      player.hp = 0;
-      wastePlayer();
-    } else if (source === 'police') world.toast('Officer fired at you');
-  }
-
-  function wastePlayer() {
-    player.dead = true;
-    player.inVehicle = null;
-    world.endLoss = Math.round(player.money * 0.12);
-    player.money -= world.endLoss;
-    world.endKind = 'wasted';
-    world.respawnTimer = 2.6;
-    clearWanted(world, 'Wasted');
-    clearPoliceUnits(world);
-    world.sfx('fail');
-    addFlash(world, '#8b1f1f', 0.5, 0.8);
-  }
-
-  function bustPlayer() {
-    if (player.dead) return;
-    player.dead = true;
-    player.inVehicle = null;
-    world.endLoss = Math.round(player.money * 0.25);
-    player.money -= world.endLoss;
-    world.endKind = 'busted';
-    world.respawnTimer = 2.6;
-    clearWanted(world, 'Busted');
-    clearPoliceUnits(world);
-    world.sfx('fail');
-    addFlash(world, '#294a8c', 0.4, 0.6);
-  }
-
-  function respawn() {
-    const hospital = shopAt(city, 'hospital') ?? { x: 1590, y: 1370 };
-    player.x = hospital.x + 18;
-    player.y = hospital.y + 26;
-    player.hp = 100;
-    player.armor = 0;
-    player.dead = false;
-    player.invulnerable = 2;
-    player.inVehicle = null;
-    world.endKind = null;
-    world.respawnTimer = 0;
-    camera.x = player.x;
-    camera.y = player.y;
-    world.toast('Back on the street');
-  }
-
-  function updateArea() {
-    const name = districtAt(player.x, player.y);
-    if (name === world.area.last) return;
-    world.area.last = name;
-    world.area.name = name;
-    const road = nearestRoad(player.x, player.y);
-    world.area.street = streetName(road.axis, road.index);
-    world.area.life = 3.2;
-  }
-
-  function updateAudio(dt) {
-    if (world.silent) return;
-    let engineSpeed = 0;
-    let engineActive = false;
-    let sirenVolume = 0;
-    if (player.inVehicle !== null) {
-      const car = findVehicle(world, player.inVehicle);
-      if (car) {
-        engineActive = true;
-        engineSpeed = car.speed;
-      }
-    }
-    for (const vehicle of world.vehicles) {
-      if (vehicle.driver?.type !== 'police' || !vehicle.siren) continue;
-      const away = Math.hypot(vehicle.x - player.x, vehicle.y - player.y);
-      if (away < 700) sirenVolume = Math.max(sirenVolume, 1 - away / 700);
-    }
-    setEngine(engineSpeed, engineActive);
-    setSiren(sirenVolume > 0, sirenVolume, world.time * 7);
-    updateMusic(world.music, dt, world.timeOfDay);
   }
 
   world.step = step;
   world.respawn = respawn;
-  world.neutralControls = neutralControls;
   return world;
 }
-
-function markerWithinReach(world) {
-  if (world.player.inVehicle !== null) return false;
-  const marker = world.mission.active || world.mission.failed ? null : world.storyMarker;
-  if (marker && Math.hypot(marker.x - world.player.x, marker.y - world.player.y) < 104) return true;
-  for (const job of activityMarkers(world)) {
-    if (Math.hypot(job.x - world.player.x, job.y - world.player.y) < 110) return true;
-  }
-  return false;
-}
-
-export { INTRO_DIALOGUE, updateWanted, clamp, spawnPoliceUnit, spawnRoadblock, alertPeds, damagePed };

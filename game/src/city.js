@@ -1,35 +1,35 @@
-import { BUILDING_COLORS, COLORS, GRID, WORLD } from './config.js';
-import { chance, clamp, createRandom, hashSeed, integer, pick, range } from './random.js';
+import { MAP, PALETTE, ROOF_COLORS } from './config.js';
+import { between, choose, limit, makeRandom, mixSeed, odds, whole } from './random.js';
 
-const DISTRICTS = [
-  { name: 'Old Town', inside: (x, y) => x < 940 && y < 1320 },
-  { name: 'Industrial', inside: (x, y) => x < 1120 && y >= 1320 },
-  { name: 'Downtown', inside: (x, y) => x >= 940 && x < 2060 && y >= 700 && y < 1740 },
-  { name: 'Marina', inside: (x, y) => x >= 1900 && x < 2900 && y >= 1740 },
-  { name: 'Palmside', inside: (x, y) => x >= 2780 || (x >= 1900 && y < 700) },
-  { name: 'Suburbs', inside: () => true },
+const AREAS = [
+  { name: 'Old Quarter', test: (x, y) => x < 940 && y < 1320 },
+  { name: 'Foundry Flats', test: (x, y) => x < 1120 && y >= 1320 },
+  { name: 'Downtown', test: (x, y) => x >= 940 && x < 2060 && y >= 700 && y < 1740 },
+  { name: 'Marina', test: (x, y) => x >= 1900 && x < 2900 && y >= 1740 },
+  { name: 'Palmside', test: (x, y) => x >= 2780 || (x >= 1900 && y < 700) },
+  { name: 'Suburbs', test: () => true },
 ];
 
-const LANDMARKS = {
-  '2,3': { kind: 'rampage', name: 'Rooftop Range' },
-  '2,8': { kind: 'spray', name: 'Misty Bay Paint & Body' },
-  '4,4': { kind: 'taxi', name: 'Sunfare Cab Stand' },
-  '5,7': { kind: 'garage', name: 'Sombra Motors' },
-  '6,4': { kind: 'cafe', name: 'Cafe Coral' },
-  '6,5': { kind: 'hospital', name: 'Solara General' },
-  '7,6': { kind: 'police', name: 'Bay Precinct' },
-  '10,9': { kind: 'delivery', name: 'Harbor Depot' },
-  '11,10': { kind: 'yacht', name: 'Golden Horn Club' },
-  '13,4': { kind: 'safehouse', name: 'Palm Terrace' },
+const VENUES = {
+  '2,2': { kind: 'rampage', label: 'Neon Range' },
+  '2,8': { kind: 'spray', label: 'Hushcoat Body Shop' },
+  '4,4': { kind: 'taxi', label: 'Sunfare Stand' },
+  '5,7': { kind: 'garage', label: 'Vesper Motors' },
+  '6,4': { kind: 'cafe', label: 'Cafe Astra' },
+  '6,5': { kind: 'hospital', label: 'Bayview Clinic' },
+  '7,6': { kind: 'police', label: 'Precinct Nine' },
+  '10,9': { kind: 'delivery', label: 'Harbor Depot' },
+  '11,10': { kind: 'yacht', label: 'Azure Lantern' },
+  '13,4': { kind: 'safehouse', label: 'Palm Vista' },
 };
 
-const HORIZONTAL_STREETS = [
-  'Seabreeze Lane', 'Old Mill Road', 'Alameda Avenue', 'Sunset Row',
-  'Coral Boulevard', 'Market Street', 'Palm Walk', 'Harbor Way',
-  'Foundry Street', 'Bayview Drive', 'Marina Parade', 'Breakwater Road',
+const EAST_WEST = [
+  'Breezeway Lane', 'Millstone Road', 'Alameda Walk', 'Sunset Row',
+  'Coral Boulevard', 'Market Street', 'Palm Promenade', 'Harbor Way',
+  'Furnace Street', 'Bayview Drive', 'Marina Parade', 'Breakwater Road',
 ];
 
-const VERTICAL_STREETS = [
+const NORTH_SOUTH = [
   'West Quay', 'Copper Street', 'Cedar Avenue', 'Sunfare Street', 'Linden Road',
   'Central Avenue', 'Granite Way', 'Citrus Boulevard', 'Esplanade', 'Dolphin Drive',
   'Palm Grove Road', 'East Point Road', 'Seagull Avenue', 'Marlin Street',
@@ -37,226 +37,211 @@ const VERTICAL_STREETS = [
 ];
 
 export function districtAt(x, y) {
-  for (const district of DISTRICTS) {
-    if (district.inside(x, y)) return district.name;
+  const found = AREAS.find((area) => area.test(x, y));
+  return found ? found.name : 'Solara Bay';
+}
+
+export function streetAt(axis, index) {
+  const names = axis === 'h' ? EAST_WEST : NORTH_SOUTH;
+  return names[((index % names.length) + names.length) % names.length];
+}
+
+function closestLine(value, count) {
+  const index = limit(Math.round((value - MAP.first) / MAP.step), 0, count - 1);
+  const line = MAP.first + index * MAP.step;
+  return { index, line, offset: Math.abs(value - line) };
+}
+
+export function onRoad(x, y, extra = 0) {
+  if (x < 0 || y < 0 || x > MAP.width || y > MAP.height) return false;
+  const vertical = closestLine(x, MAP.columns);
+  const horizontal = closestLine(y, MAP.rows);
+  const half = MAP.road / 2 + extra;
+  return vertical.offset <= half || horizontal.offset <= half;
+}
+
+export function inSea(x, y) {
+  return y > MAP.seaLine || x < 0 || x > MAP.width || y < 0 || y > MAP.height;
+}
+
+export function closestLane(x, y) {
+  const vertical = closestLine(x, MAP.columns);
+  const horizontal = closestLine(y, MAP.rows);
+  if (vertical.offset <= horizontal.offset) {
+    return { axis: 'v', line: vertical.line, index: vertical.index, offset: vertical.offset };
   }
-  return 'Solara Bay';
+  return { axis: 'h', line: horizontal.line, index: horizontal.index, offset: horizontal.offset };
 }
 
-export function streetName(axis, index) {
-  const names = axis === 'h' ? HORIZONTAL_STREETS : VERTICAL_STREETS;
-  const wrapped = ((index % names.length) + names.length) % names.length;
-  return names[wrapped];
+export function junctionAt(x, y) {
+  const vertical = closestLine(x, MAP.columns);
+  const horizontal = closestLine(y, MAP.rows);
+  return { x: vertical.line, y: horizontal.line, col: vertical.index, row: horizontal.index };
 }
 
-function nearestLine(value, count) {
-  const index = clamp(Math.round((value - GRID.first) / GRID.step), 0, count - 1);
-  const line = GRID.first + index * GRID.step;
-  return { index, line, distance: Math.abs(value - line) };
+export function laneShift(axis, direction) {
+  return direction * (MAP.road / 4) * (axis === 'h' ? 1 : -1);
 }
 
-export function isRoad(x, y, margin = 0) {
-  if (x < 0 || y < 0 || x > WORLD.width || y > WORLD.height) return false;
-  const column = nearestLine(x, GRID.columns);
-  const row = nearestLine(y, GRID.rows);
-  const half = GRID.road / 2 + margin;
-  return column.distance <= half || row.distance <= half;
+export function lanePoint(axis, line, along, direction) {
+  const shift = laneShift(axis, direction);
+  return axis === 'h'
+    ? { x: along, y: line + shift }
+    : { x: line + shift, y: along };
 }
 
-export function isWater(x, y) {
-  return y > WORLD.waterY || x < 0 || x > WORLD.width || y < 0 || y > WORLD.height;
+export function signalGreen(signal, time) {
+  const skew = signal.axis === 'v' ? 1 : 0;
+  return (Math.floor(time / 4) + signal.col + signal.row + skew) % 2 === 0;
 }
 
-export function nearestRoad(x, y) {
-  const column = nearestLine(x, GRID.columns);
-  const row = nearestLine(y, GRID.rows);
-  if (column.distance <= row.distance) {
-    return { axis: 'v', line: column.line, index: column.index, distance: column.distance };
-  }
-  return { axis: 'h', line: row.line, index: row.index, distance: row.distance };
-}
-
-export function nearestIntersection(x, y) {
-  const column = nearestLine(x, GRID.columns);
-  const row = nearestLine(y, GRID.rows);
-  return { x: column.line, y: row.line, col: column.index, row: row.index };
-}
-
-export function laneOffset(axis, direction) {
-  return direction * (GRID.road / 4) * (axis === 'h' ? 1 : -1);
-}
-
-export function roadPosition(axis, line, along, direction) {
-  const offset = laneOffset(axis, direction);
-  if (axis === 'h') return { x: along, y: line + offset };
-  return { x: line + offset, y: along };
-}
-
-export function trafficLightGreen(light, time) {
-  const offset = light.axis === 'v' ? 1 : 0;
-  return (Math.floor(time / 4) + light.col + light.row + offset) % 2 === 0;
-}
-
-function blockBounds(col, row) {
-  const pad = GRID.road / 2 + GRID.sidewalk;
-  const x = GRID.first + col * GRID.step + pad;
-  const y = GRID.first + row * GRID.step + pad;
-  const size = GRID.step - GRID.road - GRID.sidewalk * 2;
+function blockFrame(col, row) {
+  const inset = MAP.road / 2 + MAP.walk;
+  const x = MAP.first + col * MAP.step + inset;
+  const y = MAP.first + row * MAP.step + inset;
+  const size = MAP.step - MAP.road - MAP.walk * 2;
   return { x, y, size, cx: x + size / 2, cy: y + size / 2 };
 }
 
-function makeBuilding(random, bounds, district, kind) {
-  const isTowerPiece = district === 'Downtown' && kind === 'full' && chance(random, 0.58);
-  const width = isTowerPiece ? bounds.size - 8 : Math.min(bounds.size / 2 - 6, range(random, 48, 74));
-  const height = isTowerPiece ? bounds.size - 8 : Math.min(bounds.size / 2 - 6, range(random, 44, 72));
-  let floors;
-  if (district === 'Downtown') floors = integer(random, isTowerPiece ? 7 : 4, isTowerPiece ? 13 : 8);
-  else if (district === 'Industrial') floors = integer(random, 1, 3);
-  else floors = integer(random, 2, 5);
+function makeStructure(rng, frame, area, fill) {
+  const tower = area === 'Downtown' && fill === 'all' && odds(rng, 0.58);
+  const width = tower ? frame.size - 8 : Math.min(frame.size / 2 - 6, between(rng, 48, 74));
+  const height = tower ? frame.size - 8 : Math.min(frame.size / 2 - 6, between(rng, 44, 72));
+  let levels;
+  if (area === 'Downtown') levels = whole(rng, tower ? 7 : 4, tower ? 13 : 8);
+  else if (area === 'Foundry Flats') levels = whole(rng, 1, 3);
+  else levels = whole(rng, 2, 5);
   return {
-    x: bounds.x + range(random, 3, Math.max(4, bounds.size - width - 3)),
-    y: bounds.y + range(random, 3, Math.max(4, bounds.size - height - 3)),
+    x: frame.x + between(rng, 3, Math.max(4, frame.size - width - 3)),
+    y: frame.y + between(rng, 3, Math.max(4, frame.size - height - 3)),
     w: width,
     h: height,
-    floors,
-    color: pick(random, BUILDING_COLORS),
-    roof: chance(random, 0.35) ? '#8b8d84' : '#b7a894',
-    style: district === 'Industrial' ? 'warehouse' : floors > 5 ? 'tower' : 'shop',
-    trim: chance(random, 0.5) ? '#f0e3c2' : '#7d7469',
-    seed: random(),
-    sign: chance(random, 0.22) ? pick(random, ['BAY', 'SUN', 'CORAL', 'PIER', 'NOVA', 'MIST']) : '',
+    levels,
+    wall: choose(rng, ROOF_COLORS),
+    roof: odds(rng, 0.35) ? '#8d8e86' : '#b9aa96',
+    form: area === 'Foundry Flats' ? 'shed' : levels > 5 ? 'tower' : 'shop',
+    edge: odds(rng, 0.5) ? '#f2e5c6' : '#7e756b',
+    grain: rng(),
+    board: odds(rng, 0.22) ? choose(rng, ['SOL', 'PIER', 'CORAL', 'NOVA', 'MIST', 'BAY']) : '',
   };
 }
 
-function choosePalmSpots(random, block, district, count) {
+function makeLot(rng, col, row) {
+  const frame = blockFrame(col, row);
+  const area = districtAt(frame.cx, frame.cy);
+  const special = VENUES[`${col},${row}`] ?? null;
+  const plot = {
+    col, row, ...frame, area, special,
+    kind: 'built', index: 0,
+    structures: [], greenery: [], bays: [],
+  };
+
+  if (special) {
+    if (special.kind === 'rampage') plot.structures.push(makeStructure(rng, frame, area, 'all'));
+    else plot.kind = 'plaza';
+    return plot;
+  }
+
+  const parkChance = area === 'Palmside' ? 0.22 : area === 'Suburbs' ? 0.2 : area === 'Downtown' ? 0.05 : 0.04;
+  const emptyChance = area === 'Foundry Flats' ? 0.2 : area === 'Downtown' ? 0.13 : 0.07;
+  const roll = rng();
+
+  if (roll < parkChance) {
+    plot.kind = 'park';
+    for (let i = 0; i < 4; i += 1) {
+      plot.greenery.push({
+        x: frame.x + between(rng, 12, frame.size - 12),
+        y: frame.y + between(rng, 12, frame.size - 12),
+        scale: between(rng, 0.85, 1.3),
+      });
+    }
+    return plot;
+  }
+
+  if (roll < parkChance + emptyChance) {
+    plot.kind = 'lot';
+    for (let i = 0; i < 5; i += 1) plot.bays.push(frame.x + 12 + i * 24);
+    if (odds(rng, 0.5)) {
+      plot.structures.push(makeStructure(rng, { ...frame, size: frame.size * 0.45 }, area, 'corner'));
+    }
+    return plot;
+  }
+
+  if (odds(rng, 0.45) && area !== 'Foundry Flats') {
+    plot.structures.push(makeStructure(rng, frame, area, 'all'));
+    return plot;
+  }
+
+  const density = area === 'Downtown' ? 0.88 : area === 'Foundry Flats' ? 0.6 : 0.76;
+  for (let quadrant = 0; quadrant < 4; quadrant += 1) {
+    if (!odds(rng, density)) continue;
+    const piece = {
+      x: frame.x + (quadrant % 2) * frame.size / 2,
+      y: frame.y + Math.floor(quadrant / 2) * frame.size / 2,
+      size: frame.size / 2,
+    };
+    plot.structures.push(makeStructure(rng, piece, area, 'quarter'));
+  }
+  return plot;
+}
+
+function pavementPalms(rng, plot, area, amount) {
   const spots = [];
-  for (let i = 0; i < count; i += 1) {
-    if (block.type === 'park') continue;
+  if (plot.kind === 'park') return spots;
+  for (let i = 0; i < amount; i += 1) {
     spots.push({
-      x: block.x - 10 + random() * (block.size + 20),
-      y: i === 0 ? block.y - 11 : block.y + block.size + 11,
-      scale: range(random, 0.8, district === 'Palmside' ? 1.35 : 1.25),
-      lean: range(random, -0.16, 0.16),
+      x: plot.x - 10 + rng() * (plot.size + 20),
+      y: i === 0 ? plot.y - 11 : plot.y + plot.size + 11,
+      scale: between(rng, 0.8, area === 'Palmside' ? 1.35 : 1.25),
+      lean: between(rng, -0.16, 0.16),
     });
   }
   return spots;
 }
 
-function makeBlock(random, col, row) {
-  const bounds = blockBounds(col, row);
-  const district = districtAt(bounds.cx, bounds.cy);
-  const special = LANDMARKS[`${col},${row}`] ?? null;
-  const block = {
-    col,
-    row,
-    ...bounds,
-    district,
-    special,
-    type: 'built',
-    buildings: [],
-    trees: [],
-    details: [],
-    slots: [],
-  };
-
-  if (special !== null) {
-    if (special.kind === 'rampage') block.buildings.push(makeBuilding(random, bounds, district, 'full'));
-    else block.type = 'plaza';
-    return block;
-  }
-
-  const parkRate = district === 'Palmside' ? 0.22 : district === 'Suburbs' ? 0.2 : district === 'Downtown' ? 0.05 : 0.04;
-  const lotRate = district === 'Industrial' ? 0.2 : district === 'Downtown' ? 0.13 : 0.07;
-  const roll = random();
-
-  if (roll < parkRate) {
-    block.type = 'park';
-    for (let i = 0; i < 4; i += 1) {
-      block.trees.push({
-        x: bounds.x + range(random, 12, bounds.size - 12),
-        y: bounds.y + range(random, 12, bounds.size - 12),
-        scale: range(random, 0.85, 1.3),
-      });
-    }
-    return block;
-  }
-
-  if (roll < parkRate + lotRate) {
-    block.type = 'lot';
-    for (let i = 0; i < 5; i += 1) block.slots.push(bounds.x + 12 + i * 24);
-    if (chance(random, 0.5)) {
-      block.buildings.push(makeBuilding(random, { ...bounds, size: bounds.size * 0.45 }, district, 'corner'));
-    }
-    return block;
-  }
-
-  if (chance(random, 0.45) && district !== 'Industrial') {
-    block.buildings.push(makeBuilding(random, bounds, district, 'full'));
-    return block;
-  }
-
-  for (let quadrant = 0; quadrant < 4; quadrant += 1) {
-    const rate = district === 'Downtown' ? 0.88 : district === 'Industrial' ? 0.6 : 0.76;
-    if (!chance(random, rate)) continue;
-    const piece = {
-      x: bounds.x + (quadrant % 2) * bounds.size / 2,
-      y: bounds.y + Math.floor(quadrant / 2) * bounds.size / 2,
-      size: bounds.size / 2,
-    };
-    block.buildings.push(makeBuilding(random, piece, district, 'quadrant'));
-  }
-  return block;
-}
-
-export function createCity(seed) {
-  const random = createRandom(seed ^ 0x5eed);
-  const blocks = [];
-  const grid = [];
-  const buildings = [];
-  const lights = [];
+export function generateCity(seed) {
+  const rng = makeRandom(seed ^ 0x51ed);
+  const plots = [];
+  const rows = [];
+  const structures = [];
+  const lamps = [];
   const signals = [];
   const palms = [];
-  const props = [];
+  const furnishings = [];
   const shops = [];
 
-  for (let row = 0; row < GRID.rows - 1; row += 1) {
+  for (let row = 0; row < MAP.rows - 1; row += 1) {
     const line = [];
-    for (let col = 0; col < GRID.columns - 1; col += 1) {
-      const block = makeBlock(random, col, row);
-      block.index = blocks.length;
-      blocks.push(block);
-      line.push(block);
-      buildings.push(...block.buildings);
-      if (block.special) {
-        shops.push({ ...block.special, x: block.cx, y: block.cy, col, row });
-      }
-      const district = districtAt(block.cx, block.cy);
-      const palmCount = block.type === 'park' ? block.trees.length : district === 'Palmside' ? 2 : 1;
-      palms.push(...choosePalmSpots(random, block, district, palmCount));
-      if (chance(random, 0.45)) {
-        props.push({
-          kind: chance(random, 0.5) ? 'bench' : 'bin',
-          x: block.x + range(random, 8, block.size - 8),
-          y: block.y + block.size + 9,
-          angle: 0,
+    for (let col = 0; col < MAP.columns - 1; col += 1) {
+      const plot = makeLot(rng, col, row);
+      plot.index = plots.length;
+      plots.push(plot);
+      line.push(plot);
+      structures.push(...plot.structures);
+      if (plot.special) shops.push({ ...plot.special, x: plot.cx, y: plot.cy, col, row });
+      const area = districtAt(plot.cx, plot.cy);
+      const amount = plot.kind === 'park' ? plot.greenery.length : area === 'Palmside' ? 2 : 1;
+      palms.push(...pavementPalms(rng, plot, area, amount));
+      if (odds(rng, 0.45)) {
+        furnishings.push({
+          kind: odds(rng, 0.5) ? 'bench' : 'bin',
+          x: plot.x + between(rng, 8, plot.size - 8),
+          y: plot.y + plot.size + 9,
         });
       }
     }
-    grid.push(line);
+    rows.push(line);
   }
 
-  for (let col = 0; col < GRID.columns; col += 1) {
-    for (let row = 0; row < GRID.rows; row += 1) {
-      const x = GRID.first + col * GRID.step;
-      const y = GRID.first + row * GRID.step;
-      const pattern = hashSeed(seed, col, row);
-      lights.push({ x: x + 20, y: y + 20, warm: pattern % 3 === 0 });
-      lights.push({ x: x - 20, y: y - 20, warm: pattern % 5 === 0 });
+  for (let col = 0; col < MAP.columns; col += 1) {
+    for (let row = 0; row < MAP.rows; row += 1) {
+      const x = MAP.first + col * MAP.step;
+      const y = MAP.first + row * MAP.step;
+      const pattern = mixSeed(seed, col, row);
+      lamps.push({ x: x + 20, y: y + 20, warm: pattern % 3 === 0 });
+      lamps.push({ x: x - 20, y: y - 20, warm: pattern % 5 === 0 });
       signals.push({
-        x: x + 30,
-        y: y + 30,
-        col,
-        row,
+        x: x + 30, y: y + 30, col, row,
         axis: pattern % 2 === 0 ? 'h' : 'v',
         phase: pattern % 4,
       });
@@ -265,121 +250,121 @@ export function createCity(seed) {
 
   for (let i = 0; i < 46; i += 1) {
     palms.push({
-      x: range(random, 60, WORLD.width - 60),
-      y: range(random, WORLD.beachY + 8, WORLD.waterY - 12),
-      scale: range(random, 0.95, 1.5),
-      lean: range(random, -0.2, 0.2),
+      x: between(rng, 60, MAP.width - 60),
+      y: between(rng, MAP.sandLine + 8, MAP.seaLine - 12),
+      scale: between(rng, 0.95, 1.5),
+      lean: between(rng, -0.2, 0.2),
     });
   }
 
-  return { seed, blocks, grid, buildings, lights, signals, palms, props, shops };
+  return {
+    seed, plots, grid: rows, structures, lamps, signals, palms,
+    furnishings, shops, buildings: structures,
+  };
 }
 
-export function blockAt(city, x, y) {
-  const col = Math.floor((x - GRID.first) / GRID.step);
-  const row = Math.floor((y - GRID.first) / GRID.step);
-  if (col < 0 || row < 0 || col >= GRID.columns - 1 || row >= GRID.rows - 1) return null;
+export function blockUnder(city, x, y) {
+  const col = Math.floor((x - MAP.first) / MAP.step);
+  const row = Math.floor((y - MAP.first) / MAP.step);
+  if (col < 0 || row < 0 || col >= MAP.columns - 1 || row >= MAP.rows - 1) return null;
   return city.grid[row][col];
 }
 
-export function pointInBuilding(city, x, y) {
-  const block = blockAt(city, x, y);
-  if (block === null) return null;
-  for (const building of block.buildings) {
-    if (x >= building.x && x <= building.x + building.w && y >= building.y && y <= building.y + building.h) {
-      return building;
-    }
-  }
-  return null;
+export function buildingUnder(city, x, y) {
+  const plot = blockUnder(city, x, y);
+  if (plot === null) return null;
+  return plot.structures.find((building) => (
+    x >= building.x && x <= building.x + building.w
+    && y >= building.y && y <= building.y + building.h
+  )) ?? null;
 }
 
-function pushOutsideBuilding(x, y, radius, building) {
-  const nearestX = clamp(x, building.x, building.x + building.w);
-  const nearestY = clamp(y, building.y, building.y + building.h);
-  let dx = x - nearestX;
-  let dy = y - nearestY;
+function ejectFrom(building, x, y, radius) {
+  const nearX = limit(x, building.x, building.x + building.w);
+  const nearY = limit(y, building.y, building.y + building.h);
+  let dx = x - nearX;
+  let dy = y - nearY;
   const squared = dx * dx + dy * dy;
   if (squared >= radius * radius) return { x, y, hit: false };
 
   if (squared < 0.0001) {
-    const options = [
-      { amount: Math.abs(x - building.x), x: building.x - radius, y: building.y + building.h / 2 },
-      { amount: Math.abs(building.x + building.w - x), x: building.x + building.w + radius, y: building.y + building.h / 2 },
-      { amount: Math.abs(y - building.y), x: building.x + building.w / 2, y: building.y - radius },
-      { amount: Math.abs(building.y + building.h - y), x: building.x + building.w / 2, y: building.y + building.h + radius },
+    const escapes = [
+      { distance: Math.abs(x - building.x), x: building.x - radius, y: building.y + building.h / 2 },
+      { distance: Math.abs(building.x + building.w - x), x: building.x + building.w + radius, y: building.y + building.h / 2 },
+      { distance: Math.abs(y - building.y), x: building.x + building.w / 2, y: building.y - radius },
+      { distance: Math.abs(building.y + building.h - y), x: building.x + building.w / 2, y: building.y + building.h + radius },
     ];
-    options.sort((a, b) => a.amount - b.amount);
-    return { x: options[0].x, y: options[0].y, hit: true };
+    escapes.sort((a, b) => a.distance - b.distance);
+    return { x: escapes[0].x, y: escapes[0].y, hit: true };
   }
 
-  const length = Math.sqrt(squared);
-  dx /= length;
-  dy /= length;
-  return { x: nearestX + dx * radius, y: nearestY + dy * radius, hit: true };
+  const span = Math.sqrt(squared);
+  dx /= span;
+  dy /= span;
+  return { x: nearX + dx * radius, y: nearY + dy * radius, hit: true };
 }
 
-export function resolveCircle(city, x, y, radius) {
+export function clearOfBuildings(city, x, y, radius) {
   let hit = false;
-  const baseCol = Math.floor((x - GRID.first) / GRID.step);
-  const baseRow = Math.floor((y - GRID.first) / GRID.step);
-  for (let rowOffset = -1; rowOffset <= 1; rowOffset += 1) {
-    for (let colOffset = -1; colOffset <= 1; colOffset += 1) {
-      const col = baseCol + colOffset;
-      const row = baseRow + rowOffset;
-      if (col < 0 || row < 0 || col >= GRID.columns - 1 || row >= GRID.rows - 1) continue;
-      for (const building of city.grid[row][col].buildings) {
-        const resolved = pushOutsideBuilding(x, y, radius, building);
-        x = resolved.x;
-        y = resolved.y;
-        hit = hit || resolved.hit;
+  const baseCol = Math.floor((x - MAP.first) / MAP.step);
+  const baseRow = Math.floor((y - MAP.first) / MAP.step);
+  for (let rowShift = -1; rowShift <= 1; rowShift += 1) {
+    for (let colShift = -1; colShift <= 1; colShift += 1) {
+      const col = baseCol + colShift;
+      const row = baseRow + rowShift;
+      if (col < 0 || row < 0 || col >= MAP.columns - 1 || row >= MAP.rows - 1) continue;
+      for (const building of city.grid[row][col].structures) {
+        const moved = ejectFrom(building, x, y, radius);
+        x = moved.x;
+        y = moved.y;
+        hit = hit || moved.hit;
       }
     }
   }
   if (x < radius) { x = radius; hit = true; }
-  if (x > WORLD.width - radius) { x = WORLD.width - radius; hit = true; }
+  if (x > MAP.width - radius) { x = MAP.width - radius; hit = true; }
   if (y < radius) { y = radius; hit = true; }
-  const shore = WORLD.waterY - radius - 6;
-  if (y > shore) { y = shore; hit = true; }
+  if (y > MAP.seaLine - radius - 6) { y = MAP.seaLine - radius - 6; hit = true; }
   return { x, y, hit };
 }
 
-export function lineBlocked(city, x1, y1, x2, y2) {
-  const length = Math.hypot(x2 - x1, y2 - y1);
+export function rayBlocked(city, ax, ay, bx, by) {
+  const length = Math.hypot(bx - ax, by - ay);
   const samples = Math.max(1, Math.floor(length / 10));
   for (let i = 1; i < samples; i += 1) {
-    const t = i / samples;
-    if (pointInBuilding(city, x1 + (x2 - x1) * t, y1 + (y2 - y1) * t)) return true;
+    const share = i / samples;
+    if (buildingUnder(city, ax + (bx - ax) * share, ay + (by - ay) * share)) return true;
   }
   return false;
 }
 
-export function shopAt(city, kind) {
+export function shopByKind(city, kind) {
   return city.shops.find((shop) => shop.kind === kind) ?? null;
 }
 
-export function randomRoadPoint(city, random, axis = null) {
-  const direction = chance(random, 0.5) ? 1 : -1;
-  const chosen = axis ?? (chance(random, 0.5) ? 'h' : 'v');
+export function roadSample(city, rng, axis = null) {
+  const direction = odds(rng, 0.5) ? 1 : -1;
+  const chosen = axis ?? (odds(rng, 0.5) ? 'h' : 'v');
   if (chosen === 'h') {
-    const line = GRID.first + integer(random, 0, GRID.rows - 1) * GRID.step;
-    return roadPosition('h', line, range(random, 60, WORLD.width - 60), direction);
+    const line = MAP.first + whole(rng, 0, MAP.rows - 1) * MAP.step;
+    return lanePoint('h', line, between(rng, 60, MAP.width - 60), direction);
   }
-  const line = GRID.first + integer(random, 0, GRID.columns - 1) * GRID.step;
-  return roadPosition('v', line, range(random, 60, WORLD.waterY - 60), direction);
+  const line = MAP.first + whole(rng, 0, MAP.columns - 1) * MAP.step;
+  return lanePoint('v', line, between(rng, 60, MAP.seaLine - 60), direction);
 }
 
-export function sidewalkPoint(city, random) {
-  const block = pick(random, city.blocks);
-  const side = integer(random, 0, 3);
-  const along = range(random, 8, block.size - 8);
-  if (side === 0) return { x: block.x + along, y: block.y - 10 };
-  if (side === 1) return { x: block.x + block.size + 10, y: block.y + along };
-  if (side === 2) return { x: block.x + along, y: block.y + block.size + 10 };
-  return { x: block.x - 10, y: block.y + along };
+export function walkSample(city, rng) {
+  const plot = choose(rng, city.plots);
+  const side = whole(rng, 0, 3);
+  const along = between(rng, 8, plot.size - 8);
+  if (side === 0) return { x: plot.x + along, y: plot.y - 10 };
+  if (side === 1) return { x: plot.x + plot.size + 10, y: plot.y + along };
+  if (side === 2) return { x: plot.x + along, y: plot.y + plot.size + 10 };
+  return { x: plot.x - 10, y: plot.y + along };
 }
 
-export function buildingColor(city, x, y) {
-  const block = blockAt(city, x, y);
-  if (block === null || block.buildings.length === 0) return COLORS.sand;
-  return block.buildings[0].color;
+export function groundTint(city, x, y) {
+  const plot = blockUnder(city, x, y);
+  if (plot === null || plot.structures.length === 0) return PALETTE.sand;
+  return plot.structures[0].wall;
 }

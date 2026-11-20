@@ -2,38 +2,38 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const port = 8123;
-const base = `http://127.0.0.1:${port}/`;
-const workspace = fileURLToPath(new URL('.', import.meta.url));
-const shots = JSON.parse(readFileSync(new URL('./shots.json', import.meta.url), 'utf8'));
-const chrome = '/workspace/.cache/puppeteer/chrome-headless-shell/linux-157.0.8103.78/chrome-headless-shell-linux64/chrome-headless-shell';
+const serverPort = 8123;
+const host = `http://127.0.0.1:${serverPort}/`;
+const folder = fileURLToPath(new URL('.', import.meta.url));
+const frames = JSON.parse(readFileSync(new URL('./shots.json', import.meta.url), 'utf8'));
+const binary = '/workspace/.cache/puppeteer/chrome-headless-shell/linux-157.0.8103.78/chrome-headless-shell-linux64/chrome-headless-shell';
 
-const server = spawn(process.execPath, ['serve.ts', '--port', String(port)], {
-  cwd: workspace,
+const server = spawn(process.execPath, ['serve.ts', '--port', String(serverPort)], {
+  cwd: folder,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
-let serverOutput = '';
-server.stdout.on('data', (chunk) => { serverOutput += String(chunk); });
-server.stderr.on('data', (chunk) => { serverOutput += String(chunk); });
+let serverLog = '';
+server.stdout.on('data', (chunk) => { serverLog += String(chunk); });
+server.stderr.on('data', (chunk) => { serverLog += String(chunk); });
 
-const pause = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds));
+const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 
-async function waitForServer() {
+async function awaitServer() {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (server.exitCode !== null) throw new Error(`server exited: ${serverOutput}`);
+    if (server.exitCode !== null) throw new Error(`server exited: ${serverLog}`);
     try {
-      const response = await fetch(base);
-      if (response.ok) return;
+      const reply = await fetch(host);
+      if (reply.ok) return;
     } catch {
-      await pause(100);
+      await wait(100);
     }
   }
-  throw new Error(`server did not start: ${serverOutput}`);
+  throw new Error(`server did not start: ${serverLog}`);
 }
 
-function capture(url, output) {
+function shoot(url, output) {
   return new Promise((done, fail) => {
-    const args = [
+    const flags = [
       '--headless',
       '--no-sandbox',
       '--disable-dev-shm-usage',
@@ -46,39 +46,39 @@ function capture(url, output) {
       `--screenshot=${output}`,
       url,
     ];
-    const browser = spawn(chrome, args, {
-      cwd: workspace,
+    const browser = spawn(binary, flags, {
+      cwd: folder,
       env: { ...process.env, LD_LIBRARY_PATH: '/workspace/chrome-libs' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    let log = '';
-    browser.stdout.on('data', (chunk) => { log += String(chunk); });
-    browser.stderr.on('data', (chunk) => { log += String(chunk); });
+    let browserLog = '';
+    browser.stdout.on('data', (chunk) => { browserLog += String(chunk); });
+    browser.stderr.on('data', (chunk) => { browserLog += String(chunk); });
     browser.on('error', fail);
     browser.on('exit', (code) => {
       if (code === 0) done();
-      else fail(new Error(`chrome exited ${code}: ${log}`));
+      else fail(new Error(`chrome exited ${code}: ${browserLog}`));
     });
   });
 }
 
 mkdirSync(new URL('./screenshots/', import.meta.url), { recursive: true });
-const problems = [];
+const errors = [];
 
 try {
-  await waitForServer();
-  for (const shot of shots) {
-    const output = `screenshots/${shot.name}`;
-    await capture(base + shot.query, output);
-    const bytes = statSync(new URL(`./screenshots/${shot.name}`, import.meta.url)).size;
-    console.log(`${shot.name}: ${bytes} bytes`);
-    if (bytes > 200 * 1024) problems.push(`${shot.name} is ${bytes} bytes`);
+  await awaitServer();
+  for (const frame of frames) {
+    const output = `screenshots/${frame.name}`;
+    await shoot(host + frame.query, output);
+    const size = statSync(new URL(`./screenshots/${frame.name}`, import.meta.url)).size;
+    console.log(`${frame.name}: ${size} bytes`);
+    if (size > 200 * 1024) errors.push(`${frame.name} is ${size} bytes`);
   }
 } finally {
   server.kill();
 }
 
-if (problems.length > 0) {
-  console.error(problems.join('\n'));
+if (errors.length > 0) {
+  console.error(errors.join('\n'));
   process.exitCode = 1;
 }

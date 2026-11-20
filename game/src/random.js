@@ -1,47 +1,51 @@
-export function createRandom(seed) {
-  let state = seed | 0;
+export function makeRandom(seed) {
+  let state = (seed >>> 0) || 0x51f0a2c3;
   return function next() {
-    state = (state + 0x6d2b79f5) | 0;
-    let value = Math.imul(state ^ (state >>> 15), 1 | state);
-    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value;
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    state = (state + 0x9e3779b9) | 0;
+    let mixed = (state ^ (state >>> 16)) >>> 0;
+    mixed = Math.imul(mixed, 0x21f0aaad);
+    mixed = (mixed ^ (mixed >>> 15)) >>> 0;
+    mixed = Math.imul(mixed, 0x735a2d97);
+    return ((mixed ^ (mixed >>> 15)) >>> 0) / 4294967296;
   };
 }
 
-export function range(random, low, high) {
-  return low + (high - low) * random();
+export function between(rng, low, high) {
+  return low + (high - low) * rng();
 }
 
-export function integer(random, low, high) {
-  return Math.floor(range(random, low, high + 1));
+export function whole(rng, low, high) {
+  return Math.floor(between(rng, low, high + 1));
 }
 
-export function pick(random, values) {
-  if (values.length === 0) return undefined;
-  return values[Math.min(values.length - 1, Math.floor(random() * values.length))];
+export function choose(rng, items) {
+  if (items.length === 0) return undefined;
+  return items[Math.min(items.length - 1, Math.floor(rng() * items.length))];
 }
 
-export function chance(random, probability) {
-  return random() < probability;
+export function odds(rng, chance) {
+  return rng() < chance;
 }
 
-export function hashSeed(seed, first, second = 0) {
-  let value = (seed ^ Math.imul(first + 1, 0x9e3779b1) ^ Math.imul(second + 1, 0x85ebca6b)) | 0;
+export function mixSeed(seed, first, second = 0) {
+  let value = (seed ^ Math.imul(first + 17, 0x9e3779b1) ^ Math.imul(second + 31, 0x85ebca6b)) | 0;
   value = Math.imul(value ^ (value >>> 16), 0x7feb352d);
   value = Math.imul(value ^ (value >>> 15), 0x846ca68b);
   return (value ^ (value >>> 16)) >>> 0;
 }
 
-export function clamp(value, low, high) {
-  if (value < low) return low;
-  if (value > high) return high;
-  return value;
+export function limit(value, low, high) {
+  return value < low ? low : value > high ? high : value;
 }
 
-export function distance(ax, ay, bx, by) {
+export function gap(ax, ay, bx, by) {
   return Math.hypot(ax - bx, ay - by);
 }
 
-export function lerp(from, to, amount) {
-  return from + (to - from) * amount;
+export function blend(from, to, share) {
+  return from + (to - from) * share;
+}
+
+export function bearingDifference(target, current) {
+  return ((target - current + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 }

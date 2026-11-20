@@ -1,9 +1,21 @@
-import { SAVE_KEY } from './config.js';
+import { SAVE_ID } from './config.js';
+import { forceStars } from './wanted.js';
+import { STORY_COUNT } from './missions.js';
+
+function storage() {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 export function saveGame(world) {
+  const store = storage();
+  if (store === null) return false;
   try {
     const data = {
-      version: 1,
+      edition: 2,
       seed: world.seed,
       x: world.player.x,
       y: world.player.y,
@@ -12,14 +24,15 @@ export function saveGame(world) {
       hp: world.player.hp,
       armor: world.player.armor,
       weapon: world.player.weapon,
+      hasGun: world.player.hasGun,
       ammo: world.player.ammo,
       reserve: world.player.reserve,
-      missionId: world.mission.id,
-      completed: world.mission.completed,
-      time: world.timeOfDay,
-      wanted: world.wanted.level,
+      mission: world.mission.id,
+      cleared: world.mission.completed,
+      clock: world.dayClock,
+      stars: world.wanted.stars,
     };
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    store.setItem(SAVE_ID, JSON.stringify(data));
     return true;
   } catch {
     return false;
@@ -27,11 +40,13 @@ export function saveGame(world) {
 }
 
 export function readSave() {
+  const store = storage();
+  if (store === null) return null;
   try {
-    const raw = window.localStorage.getItem(SAVE_KEY);
+    const raw = store.getItem(SAVE_ID);
     if (raw === null) return null;
     const data = JSON.parse(raw);
-    if (!data || data.version !== 1) return null;
+    if (!data || data.edition !== 2) return null;
     if (!Number.isFinite(data.x) || !Number.isFinite(data.y)) return null;
     return data;
   } catch {
@@ -44,8 +59,10 @@ export function hasSave() {
 }
 
 export function deleteSave() {
+  const store = storage();
+  if (store === null) return;
   try {
-    window.localStorage.removeItem(SAVE_KEY);
+    store.removeItem(SAVE_ID);
   } catch {
     return;
   }
@@ -53,20 +70,24 @@ export function deleteSave() {
 
 export function applySave(world, data) {
   if (!data) return;
-  world.player.x = data.x;
-  world.player.y = data.y;
-  world.player.money = data.money ?? 250;
-  world.player.respect = data.respect ?? 0;
-  world.player.hp = data.hp ?? 100;
-  world.player.armor = data.armor ?? 0;
-  world.player.weapon = data.weapon === 'pistol' ? 'pistol' : 'fists';
-  world.player.hasPistol = world.player.weapon === 'pistol';
-  world.player.ammo = data.ammo ?? 0;
-  world.player.reserve = data.reserve ?? 0;
-  world.mission.id = Math.max(0, Math.min(7, data.missionId ?? 0));
-  world.mission.completed = data.completed ?? 0;
-  world.timeOfDay = data.time ?? 0.28;
-  if ((data.wanted ?? 0) > 0) world.setWantedLevel(data.wanted, 'Saved heat');
-  world.camera.x = world.player.x;
-  world.camera.y = world.player.y;
+  const player = world.player;
+  player.x = data.x;
+  player.y = data.y;
+  player.money = Number.isFinite(data.money) ? data.money : 260;
+  player.respect = Number.isFinite(data.respect) ? data.respect : 0;
+  player.hp = Number.isFinite(data.hp) ? Math.max(1, Math.min(100, data.hp)) : 100;
+  player.armor = Number.isFinite(data.armor) ? Math.max(0, Math.min(100, data.armor)) : 0;
+  player.hasGun = data.weapon === 'pistol' || data.hasGun === true;
+  player.weapon = player.hasGun ? 'pistol' : 'fists';
+  player.ammo = Number.isFinite(data.ammo) ? data.ammo : 0;
+  player.reserve = Number.isFinite(data.reserve) ? data.reserve : 0;
+  player.carId = null;
+  player.dead = false;
+
+  world.mission.id = Math.max(0, Math.min(STORY_COUNT - 1, Math.floor(data.mission ?? 0)));
+  world.mission.completed = Math.max(0, Math.floor(data.cleared ?? 0));
+  world.dayClock = Number.isFinite(data.clock) ? ((data.clock % 1) + 1) % 1 : 0.28;
+  if ((data.stars ?? 0) > 0) forceStars(world, data.stars, 'Saved heat');
+  world.camera.x = player.x;
+  world.camera.y = player.y;
 }

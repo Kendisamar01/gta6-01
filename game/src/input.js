@@ -1,130 +1,125 @@
-import { VIEW } from './config.js';
-import { screenToWorld } from './camera.js';
+import { SCREEN } from './config.js';
+import { screenPoint } from './camera.js';
 
-const HELD_KEYS = new Set([
-  'KeyW', 'KeyA', 'KeyS', 'KeyD',
-  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+const HELD = new Set([
+  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
   'ShiftLeft', 'ShiftRight', 'Space', 'KeyE', 'KeyF', 'KeyH', 'KeyR',
 ]);
 
-const EDGE_KEYS = new Set([
-  'KeyE', 'KeyF', 'KeyH', 'KeyR', 'KeyM', 'KeyP', 'Escape',
-  'Enter', 'NumpadEnter', 'Space', 'Digit1', 'Digit2', 'Digit3',
+const EDGES = new Set([
+  'KeyE', 'KeyF', 'KeyH', 'KeyR', 'KeyM', 'KeyP', 'Escape', 'Enter',
+  'NumpadEnter', 'Space', 'Digit1', 'Digit2', 'Digit3',
 ]);
 
-export function createInput(canvas) {
+export function makeInput(canvas) {
   const held = new Set();
-  const pressed = new Set();
-  const pointer = { x: VIEW.width / 2 + 120, y: VIEW.height / 2 };
-  let firing = false;
-  let firedThisFrame = false;
+  const edges = new Set();
+  const cursor = { x: SCREEN.width / 2 + 120, y: SCREEN.height / 2 };
+  let triggerHeld = false;
+  let triggerEdge = false;
 
-  function rememberPointer(event) {
-    const box = canvas.getBoundingClientRect();
-    pointer.x = ((event.clientX - box.left) / Math.max(1, box.width)) * VIEW.width;
-    pointer.y = ((event.clientY - box.top) / Math.max(1, box.height)) * VIEW.height;
+  function locate(event) {
+    const area = canvas.getBoundingClientRect();
+    cursor.x = ((event.clientX - area.left) / Math.max(1, area.width)) * SCREEN.width;
+    cursor.y = ((event.clientY - area.top) / Math.max(1, area.height)) * SCREEN.height;
   }
 
   window.addEventListener('keydown', (event) => {
-    if (!HELD_KEYS.has(event.code) && !EDGE_KEYS.has(event.code)) return;
+    if (!HELD.has(event.code) && !EDGES.has(event.code)) return;
     event.preventDefault();
-    if (!event.repeat) pressed.add(event.code);
-    if (HELD_KEYS.has(event.code)) held.add(event.code);
+    if (!event.repeat) edges.add(event.code);
+    if (HELD.has(event.code)) held.add(event.code);
   });
 
   window.addEventListener('keyup', (event) => held.delete(event.code));
 
-  window.addEventListener('blur', () => {
-    held.clear();
-    pressed.clear();
-    firing = false;
-    firedThisFrame = false;
-  });
+  window.addEventListener('blur', reset);
 
-  canvas.addEventListener('pointermove', rememberPointer);
-
+  canvas.addEventListener('pointermove', locate);
   canvas.addEventListener('pointerdown', (event) => {
-    rememberPointer(event);
+    locate(event);
     if (event.button === 0) {
-      firing = true;
-      firedThisFrame = true;
+      triggerHeld = true;
+      triggerEdge = true;
     }
     event.preventDefault();
   });
-
   window.addEventListener('pointerup', (event) => {
-    if (event.button === 0) firing = false;
+    if (event.button === 0) triggerHeld = false;
   });
-
   canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 
-  function down(...codes) {
+  function pressed(...codes) {
     return codes.some((code) => held.has(code));
   }
 
-  function consume(code) {
-    if (!pressed.has(code)) return false;
-    pressed.delete(code);
+  function tapped(code) {
+    if (!edges.has(code)) return false;
+    edges.delete(code);
     return true;
   }
 
+  function reset() {
+    held.clear();
+    edges.clear();
+    triggerHeld = false;
+    triggerEdge = false;
+  }
+
   function sample(camera) {
-    const aim = screenToWorld(camera, pointer.x, pointer.y);
-    const slot = consume('Digit1') ? 1 : consume('Digit2') ? 2 : consume('Digit3') ? 3 : 0;
-    const controls = {
-      x: Number(down('KeyD', 'ArrowRight')) - Number(down('KeyA', 'ArrowLeft')),
-      y: Number(down('KeyS', 'ArrowDown')) - Number(down('KeyW', 'ArrowUp')),
-      run: down('ShiftLeft', 'ShiftRight'),
-      handbrake: down('Space'),
-      fire: firing,
-      firePressed: firedThisFrame,
-      interact: consume('KeyE'),
-      interactAlt: consume('KeyF'),
-      horn: consume('KeyH'),
-      reload: consume('KeyR'),
-      confirm: consume('Enter', 'NumpadEnter', 'Space'),
-      pause: consume('Escape', 'KeyP'),
-      mute: consume('KeyM'),
-      weaponSlot: slot,
+    const aim = screenPoint(camera, cursor.x, cursor.y);
+    let slot = 0;
+    if (tapped('Digit1')) slot = 1;
+    else if (tapped('Digit2')) slot = 2;
+    else if (tapped('Digit3')) slot = 3;
+
+    const result = {
+      x: Number(pressed('KeyD', 'ArrowRight')) - Number(pressed('KeyA', 'ArrowLeft')),
+      y: Number(pressed('KeyS', 'ArrowDown')) - Number(pressed('KeyW', 'ArrowUp')),
+      run: pressed('ShiftLeft', 'ShiftRight'),
+      brake: pressed('Space'),
+      fire: triggerHeld,
+      firePressed: triggerEdge,
+      enter: tapped('KeyE'),
+      leave: tapped('KeyF'),
+      horn: tapped('KeyH'),
+      reload: tapped('KeyR'),
+      confirm: tapped('Enter', 'NumpadEnter', 'Space'),
+      pause: tapped('Escape', 'KeyP'),
+      mute: tapped('KeyM'),
+      slot,
       aimX: aim.x,
       aimY: aim.y,
-      pointerX: pointer.x,
-      pointerY: pointer.y,
+      pointerX: cursor.x,
+      pointerY: cursor.y,
     };
-    firedThisFrame = false;
-    return controls;
+    triggerEdge = false;
+    return result;
   }
 
-  function clear() {
-    held.clear();
-    pressed.clear();
-    firing = false;
-    firedThisFrame = false;
-  }
-
-  return { sample, clear };
+  return { sample, reset };
 }
 
-export function neutralControls(overrides = {}) {
+export function idle(overrides = {}) {
   return {
     x: 0,
     y: 0,
     run: false,
-    handbrake: false,
+    brake: false,
     fire: false,
     firePressed: false,
-    interact: false,
-    interactAlt: false,
+    enter: false,
+    leave: false,
     horn: false,
     reload: false,
     confirm: false,
     pause: false,
     mute: false,
-    weaponSlot: 0,
+    slot: 0,
     aimX: 0,
     aimY: 0,
-    pointerX: VIEW.width / 2,
-    pointerY: VIEW.height / 2,
+    pointerX: SCREEN.width / 2,
+    pointerY: SCREEN.height / 2,
     ...overrides,
   };
 }

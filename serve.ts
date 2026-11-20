@@ -3,15 +3,15 @@ import { createServer } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = resolve(fileURLToPath(new URL('./game', import.meta.url)));
+const publicRoot = resolve(fileURLToPath(new URL('./game', import.meta.url)));
 const args = process.argv.slice(2);
-const flagIndex = args.indexOf('--port');
-const requestedPort = flagIndex === -1 ? 8080 : Number(args[flagIndex + 1]);
-const port = Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort < 65536
-  ? requestedPort
+const portFlag = args.indexOf('--port');
+const parsedPort = portFlag === -1 ? NaN : Number(args[portFlag + 1]);
+const port = Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort < 65536
+  ? parsedPort
   : 8080;
 
-const contentTypes: Record<string, string> = {
+const types: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.gif': 'image/gif',
   '.html': 'text/html; charset=utf-8',
@@ -34,43 +34,39 @@ createServer((request, response) => {
     return;
   }
 
-  const address = new URL(request.url ?? '/', 'http://localhost');
-  let pathname: string;
+  let pathname = '';
   try {
-    pathname = decodeURIComponent(address.pathname);
+    pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
   } catch {
     response.writeHead(400).end('Bad request');
     return;
   }
-
   if (pathname.endsWith('/')) pathname += 'index.html';
-  const safePath = normalize(pathname).replace(/^[/\\]+/, '');
-  const file = resolve(root, safePath);
-  if (file !== root && !file.startsWith(root + sep)) {
+
+  const relative = normalize(pathname).replace(/^[/\\]+/, '');
+  const file = resolve(publicRoot, relative);
+  if (file !== publicRoot && !file.startsWith(publicRoot + sep)) {
     response.writeHead(403).end('Forbidden');
     return;
   }
 
-  let size: number;
+  let bytes = 0;
   try {
     const info = statSync(file);
     if (!info.isFile()) throw new Error('not a file');
-    size = info.size;
+    bytes = info.size;
   } catch {
     response.writeHead(404).end('Not found');
     return;
   }
 
   response.writeHead(200, {
-    'content-type': contentTypes[extname(file).toLowerCase()] ?? 'application/octet-stream',
-    'content-length': size,
+    'content-type': types[extname(file).toLowerCase()] ?? 'application/octet-stream',
+    'content-length': bytes,
     'cache-control': 'no-store',
   });
-  if (request.method === 'HEAD') {
-    response.end();
-    return;
-  }
-  createReadStream(file).pipe(response);
+  if (request.method === 'HEAD') response.end();
+  else createReadStream(file).pipe(response);
 }).listen(port, '127.0.0.1', () => {
   console.log(`Solara Bay is ready at http://localhost:${port}`);
 });

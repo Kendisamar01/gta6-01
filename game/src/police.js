@@ -1,222 +1,207 @@
-import { COLORS, GRID } from './config.js';
-import { laneOffset, lineBlocked, nearestRoad, resolveCircle } from './city.js';
-import { clamp } from './random.js';
-import { emit } from './effects.js';
-import { spawnVehicle, updateVehicle, damageVehicle, vehicleSpec } from './vehicles.js';
+import { MAP, PALETTE } from './config.js';
+import { clearOfBuildings, closestLane, laneShift, rayBlocked } from './city.js';
+import { bearingDifference, limit } from './random.js';
+import { spray } from './effects.js';
+import { driveCar, hurtCar, newCar } from './vehicles.js';
 
-const RESPONSE = [0, 2, 3, 5, 7, 9];
+const UNIT_TARGETS = [0, 2, 3, 5, 7, 9];
 
-function angleDelta(target, current) {
-  return ((target - current + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-}
-
-function countUnits(world) {
-  let total = 0;
-  for (const car of world.vehicles) {
-    if (car.alive && car.driver?.type === 'police') total += 1;
-  }
-  return total;
-}
-
-function pursuitSpawn(world, x, y) {
-  const bearing = world.random() * Math.PI * 2;
-  const distance = 480 + world.random() * 190;
-  const rawX = clamp(x + Math.cos(bearing) * distance, 60, GRID.first + (GRID.columns - 1) * GRID.step - 60);
-  const rawY = clamp(y + Math.sin(bearing) * distance, 60, 2560);
-  const road = nearestRoad(rawX, rawY);
+function pursuitSpot(world, x, y) {
+  const bearing = world.rng() * Math.PI * 2;
+  const distance = 480 + world.rng() * 190;
+  const rawX = limit(x + Math.cos(bearing) * distance, 60, MAP.first + (MAP.columns - 1) * MAP.step - 60);
+  const rawY = limit(y + Math.sin(bearing) * distance, 60, 2560);
+  const lane = closestLane(rawX, rawY);
   const toward = Math.atan2(y - rawY, x - rawX);
-  const direction = Math.cos(toward) * (road.axis === 'h' ? 1 : -1) >= 0 ? 1 : -1;
-  const snapped = road.axis === 'h'
-    ? { x: rawX, y: road.line + laneOffset('h', direction) }
-    : { x: road.line + laneOffset('v', direction), y: rawY };
-  const safe = resolveCircle(world.city, snapped.x, snapped.y, 18);
+  const direction = Math.cos(toward) * (lane.axis === 'h' ? 1 : -1) >= 0 ? 1 : -1;
+  const snapped = lane.axis === 'h'
+    ? { x: rawX, y: lane.line + laneShift('h', direction) }
+    : { x: lane.line + laneShift('v', direction), y: rawY };
+  const safe = clearOfBuildings(world.city, snapped.x, snapped.y, 18);
   return { x: safe.x, y: safe.y, angle: Math.atan2(y - safe.y, x - safe.x) };
 }
 
-export function spawnPoliceUnit(world, mode = 'pursue', point = null) {
-  const at = point ?? pursuitSpawn(world, world.player.x, world.player.y);
-  const car = spawnVehicle(world, 'police', at.x, at.y, at.angle, { type: 'police' });
+export function deployUnit(world, mode = 'chase', spot = null) {
+  const at = spot ?? pursuitSpot(world, world.player.x, world.player.y);
+  const car = newCar(world, 'police', at.x, at.y, at.angle, { type: 'officer' });
   car.siren = true;
-  car.ai = {
+  car.route = {
     mode,
     targetX: world.player.x,
     targetY: world.player.y,
-    shootCooldown: world.random() * 1.2,
+    fireClock: world.rng() * 1.2,
     arrest: 0,
     stuck: 0,
-    despawn: 0,
+    retire: 0,
     blockAngle: at.angle,
   };
   return car;
 }
 
-export function spawnRoadblock(world) {
+export function deployBlock(world) {
   const player = world.player;
-  const inCar = player.inVehicle !== null
-    ? world.vehicles.find((car) => car.id === player.inVehicle)
-    : null;
-  const heading = inCar != null ? inCar.angle : Math.atan2(player.aimY - player.y, player.aimX - player.x);
-  const aheadX = clamp(player.x + Math.cos(heading) * 440, 80, 3440);
-  const aheadY = clamp(player.y + Math.sin(heading) * 440, 80, 2540);
-  const road = nearestRoad(aheadX, aheadY);
-  const x = road.axis === 'v' ? road.line : aheadX;
-  const y = road.axis === 'h' ? road.line : aheadY;
-  const angle = road.axis === 'h' ? 0 : Math.PI / 2;
-  world.roadblocks.push({ x, y, angle, life: 34, flash: 0 });
+  const car = player.carId === null ? null : world.vehicles.find((unit) => unit.id === player.carId);
+  const facing = car !== null && car !== undefined
+    ? car.angle
+    : Math.atan2(player.aimY - player.y, player.aimX - player.x);
+  const aheadX = limit(player.x + Math.cos(facing) * 440, 80, 3440);
+  const aheadY = limit(player.y + Math.sin(facing) * 440, 80, 2540);
+  const lane = closestLane(aheadX, aheadY);
+  const x = lane.axis === 'v' ? lane.line : aheadX;
+  const y = lane.axis === 'h' ? lane.line : aheadY;
+  const angle = lane.axis === 'h' ? 0 : Math.PI / 2;
+  world.barriers.push({ x, y, angle, life: 34, hitGlow: 0 });
 
   for (const offset of [-30, 30]) {
     const px = x + Math.cos(angle + Math.PI / 2) * offset;
     const py = y + Math.sin(angle + Math.PI / 2) * offset;
-    const safe = resolveCircle(world.city, px, py, 18);
-    const unit = spawnPoliceUnit(world, 'block', { x: safe.x, y: safe.y, angle });
-    unit.ai.targetX = safe.x;
-    unit.ai.targetY = safe.y;
-    unit.ai.blockAngle = angle;
+    const safe = clearOfBuildings(world.city, px, py, 18);
+    const unit = deployUnit(world, 'block', { x: safe.x, y: safe.y, angle });
+    unit.route.targetX = safe.x;
+    unit.route.targetY = safe.y;
+    unit.route.blockAngle = angle;
   }
-  world.toast('Roadblock ahead');
+  world.notify('Roadblock ahead');
 }
 
-function policeControls(world, car, dt) {
-  const ai = car.ai;
-  ai.shootCooldown -= dt;
-  if (ai.mode === 'block') {
-    const dx = ai.targetX - car.x;
-    const dy = ai.targetY - car.y;
-    const target = Math.atan2(dy, dx);
+function policeOrders(world, car, dt) {
+  const route = car.route;
+  route.fireClock -= dt;
+  if (route.mode === 'block') {
+    const dx = route.targetX - car.x;
+    const dy = route.targetY - car.y;
     const distance = Math.hypot(dx, dy);
     return {
-      throttle: distance < 18 ? 0 : car.speed > 0 ? -1 : 1,
-      steer: clamp(angleDelta(target, car.angle) * 1.8, -1, 1),
+      gas: distance < 18 ? 0 : car.velocity > 0 ? -1 : 1,
+      wheel: limit(bearingDifference(Math.atan2(dy, dx), car.angle) * 1.8, -1, 1),
       handbrake: false,
     };
   }
 
-  const target = world.player.inVehicle !== null
-    ? world.vehicles.find((car) => car.id === world.player.inVehicle) ?? world.player
-    : world.player;
+  const target = world.player.carId === null
+    ? world.player
+    : world.vehicles.find((unit) => unit.id === world.player.carId) ?? world.player;
   const dx = target.x - car.x;
   const dy = target.y - car.y;
   const distance = Math.hypot(dx, dy);
-  const delta = angleDelta(Math.atan2(dy, dx), car.angle);
-  if (distance < 46 && world.player.inVehicle === null) {
-    return { throttle: -1, steer: clamp(delta * 2, -1, 1), handbrake: false };
+  const delta = bearingDifference(Math.atan2(dy, dx), car.angle);
+  if (distance < 46 && world.player.carId === null) {
+    return { gas: -1, wheel: limit(delta * 2, -1, 1), handbrake: false };
   }
   return {
-    throttle: 1,
-    steer: clamp(delta * 2.2, -1, 1),
-    handbrake: Math.abs(delta) > 1.6 && Math.abs(car.speed) > 165,
+    gas: 1,
+    wheel: limit(delta * 2.2, -1, 1),
+    handbrake: Math.abs(delta) > 1.6 && Math.abs(car.velocity) > 165,
   };
 }
 
-function updateRoadblocks(world, dt) {
-  for (let i = world.roadblocks.length - 1; i >= 0; i -= 1) {
-    const block = world.roadblocks[i];
-    block.life -= dt;
-    block.flash = Math.max(0, block.flash - dt * 3);
-    if (block.life <= 0) {
-      world.roadblocks.splice(i, 1);
+function moveBarriers(world, dt) {
+  for (let i = world.barriers.length - 1; i >= 0; i -= 1) {
+    const barrier = world.barriers[i];
+    barrier.life -= dt;
+    barrier.hitGlow = Math.max(0, barrier.hitGlow - dt * 3);
+    if (barrier.life <= 0) {
+      world.barriers.splice(i, 1);
       continue;
     }
     for (const car of world.vehicles) {
       if (!car.alive || car.driver?.type !== 'player') continue;
-      if (Math.hypot(car.x - block.x, car.y - block.y) >= 30 || Math.abs(car.speed) <= 32) continue;
-      damageVehicle(world, car, 16, 'block');
-      car.speed *= 0.45;
-      block.flash = 1;
-      emit(world, 'spark', car.x, car.y, 5, { spread: 1.8, color: COLORS.gold, size: 2.6 });
+      if (Math.hypot(car.x - barrier.x, car.y - barrier.y) >= 30 || Math.abs(car.velocity) <= 32) continue;
+      hurtCar(world, car, 16, 'block');
+      car.velocity *= 0.45;
+      barrier.hitGlow = 1;
+      spray(world, 'spark', car.x, car.y, 5, { scatter: 1.8, color: PALETTE.amber, size: 2.6 });
     }
   }
 }
 
-function fireAtTarget(world, car, target, ai) {
-  if (world.wanted.level < 2 || ai.shootCooldown > 0) return;
+function shootAt(world, car, target, route) {
+  if (world.wanted.stars < 2 || route.fireClock > 0) return;
   const distance = Math.hypot(target.x - car.x, target.y - car.y);
-  if (distance > 400 || lineBlocked(world.city, car.x, car.y, target.x, target.y)) return;
+  if (distance > 400 || rayBlocked(world.city, car.x, car.y, target.x, target.y)) return;
 
-  ai.shootCooldown = 1.1 + world.random() * 0.6;
-  const angle = Math.atan2(target.y - car.y, target.x - car.x) + (world.random() - 0.5) * 0.14;
+  route.fireClock = 1.1 + world.rng() * 0.6;
+  const angle = Math.atan2(target.y - car.y, target.x - car.x) + (world.rng() - 0.5) * 0.14;
   const muzzleX = car.x + Math.cos(angle) * 18;
   const muzzleY = car.y + Math.sin(angle) * 18;
-  world.fireBullet({
-    x: muzzleX,
-    y: muzzleY,
-    vx: Math.cos(angle) * 480,
-    vy: Math.sin(angle) * 480,
-    owner: 'police',
-    damage: 8,
-    life: 1.1,
+  world.shoot({
+    x: muzzleX, y: muzzleY,
+    vx: Math.cos(angle) * 480, vy: Math.sin(angle) * 480,
+    owner: 'police', damage: 8, life: 1.1,
   });
-  emit(world, 'muzzle', muzzleX, muzzleY, 2, {
-    spread: 0.4, angle, color: COLORS.gold, size: 3, life: 0.1,
+  spray(world, 'muzzle', muzzleX, muzzleY, 2, {
+    scatter: 0.4, angle, color: PALETTE.amber, size: 3, life: 0.1,
   });
-  world.sfx('gunshot', 0.28);
+  world.sound('gunshot', 0.28);
 }
 
-export function updatePolice(world, dt) {
-  const level = world.wanted.level;
-  if (level === 0) {
+export function movePolice(world, dt) {
+  const stars = world.wanted.stars;
+  if (stars === 0) {
     for (const car of world.vehicles) {
-      if (car.driver?.type === 'police' && car.ai) car.ai.despawn = Math.min(3, car.ai.despawn || 3);
+      if (car.driver?.type === 'officer' && car.route) {
+        car.route.retire = Math.min(3, car.route.retire || 3);
+      }
     }
   } else {
-    const missing = RESPONSE[clamp(level, 0, 5)] - countUnits(world);
-    for (let i = 0; i < missing; i += 1) spawnPoliceUnit(world);
-    world.roadblockTimer -= dt;
-    const allowed = level >= 3 && world.roadblocks.length < 1 + Math.floor((level - 3) / 2);
-    if (allowed && world.roadblockTimer <= 0) {
-      world.roadblockTimer = 16;
-      spawnRoadblock(world);
+    let units = 0;
+    for (const car of world.vehicles) {
+      if (car.alive && car.driver?.type === 'officer') units += 1;
+    }
+    const missing = UNIT_TARGETS[limit(stars, 0, 5)] - units;
+    for (let i = 0; i < missing; i += 1) deployUnit(world);
+    world.blockClock -= dt;
+    const permitted = stars >= 3 && world.barriers.length < 1 + Math.floor((stars - 3) / 2);
+    if (permitted && world.blockClock <= 0) {
+      world.blockClock = 16;
+      deployBlock(world);
     }
   }
 
-  updateRoadblocks(world, dt);
+  moveBarriers(world, dt);
 
-  const units = world.vehicles.slice();
-  for (const car of units) {
-    if (!car.alive || car.driver?.type !== 'police' || !car.ai) continue;
-    const ai = car.ai;
+  const roster = world.vehicles.slice();
+  for (const car of roster) {
+    if (!car.alive || car.driver?.type !== 'officer' || !car.route) continue;
+    const route = car.route;
 
-    if (ai.despawn > 0) {
-      ai.despawn -= dt;
-      if (ai.despawn <= 0) {
+    if (route.retire > 0) {
+      route.retire -= dt;
+      if (route.retire <= 0) {
         const index = world.vehicles.indexOf(car);
         if (index !== -1) world.vehicles.splice(index, 1);
         continue;
       }
     }
 
-    updateVehicle(world, car, policeControls(world, car, dt), dt);
+    driveCar(world, car, policeOrders(world, car, dt), dt);
 
-    ai.stuck = Math.abs(car.speed) < 12 && ai.mode === 'pursue' ? ai.stuck + dt : 0;
-    if (ai.stuck > 3.5) {
-      const at = pursuitSpawn(world, world.player.x, world.player.y);
+    route.stuck = Math.abs(car.velocity) < 12 && route.mode === 'chase' ? route.stuck + dt : 0;
+    if (route.stuck > 3.5) {
+      const at = pursuitSpot(world, world.player.x, world.player.y);
       car.x = at.x;
       car.y = at.y;
       car.angle = at.angle;
-      car.speed = 80;
-      ai.stuck = 0;
+      car.velocity = 80;
+      route.stuck = 0;
     }
 
-    const target = world.player.inVehicle !== null
-      ? world.vehicles.find((car) => car.id === world.player.inVehicle)
-      : world.player;
-    if (target === undefined || target === null) continue;
-    fireAtTarget(world, car, target, ai);
+    const target = world.player.carId === null
+      ? world.player
+      : world.vehicles.find((unit) => unit.id === world.player.carId);
+    if (!target) continue;
+    shootAt(world, car, target, route);
 
-    if (level > 0 && world.player.inVehicle === null
+    if (stars > 0 && world.player.carId === null
       && Math.hypot(target.x - car.x, target.y - car.y) < 44) {
-      ai.arrest += dt;
-      if (ai.arrest > 1.25) world.bustPlayer();
-    } else ai.arrest = 0;
+      route.arrest += dt;
+      if (route.arrest > 1.25) world.arrestPlayer();
+    } else route.arrest = 0;
   }
 }
 
-export function clearPoliceUnits(world) {
+export function recallUnits(world) {
   for (const car of world.vehicles) {
-    if (car.driver?.type === 'police' && car.ai) car.ai.despawn = 1.5;
+    if (car.driver?.type === 'officer' && car.route) car.route.retire = 1.5;
   }
-}
-
-export function policeSpec(car) {
-  return vehicleSpec(car);
 }

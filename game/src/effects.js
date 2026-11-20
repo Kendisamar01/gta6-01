@@ -1,158 +1,139 @@
-import { COLORS } from './config.js';
-import { range } from './random.js';
+import { PALETTE } from './config.js';
+import { between } from './random.js';
 
-const PARTICLE_LIMIT = 520;
-const SKID_LIMIT = 260;
+const MAX_BITS = 520;
+const MAX_TREADS = 260;
 
-export function createEffects() {
-  return { particles: [], skids: [], flashes: [], lights: [] };
+export function makeEffects() {
+  return { bits: [], treads: [], tints: [], flares: [] };
 }
 
-export function emit(world, kind, x, y, count = 1, options = {}) {
-  const random = world.random;
-  const spread = options.spread ?? 40;
-  const color = options.color ?? '#ffffff';
+export function spray(world, kind, x, y, count = 1, options = {}) {
+  const rng = world.rng;
+  const scatter = options.scatter ?? 40;
+  const tint = options.color ?? PALETTE.cream;
   const size = options.size ?? 4;
   const life = options.life ?? 0.6;
   for (let i = 0; i < count; i += 1) {
     const angle = options.angle === undefined
-      ? random() * Math.PI * 2
-      : options.angle + range(random, -spread, spread);
-    const velocity = range(random, spread * 0.4, spread * 2.2);
-    if (world.effects.particles.length >= PARTICLE_LIMIT) world.effects.particles.shift();
-    world.effects.particles.push({
-      kind,
-      x,
-      y,
-      vx: Math.cos(angle) * velocity + (options.vx ?? 0),
-      vy: Math.sin(angle) * velocity + (options.vy ?? 0),
-      life: life * range(random, 0.7, 1.3),
-      maxLife: life * 1.3,
-      size: size * range(random, 0.65, 1.4),
-      color,
+      ? rng() * Math.PI * 2
+      : options.angle + between(rng, -scatter, scatter);
+    const force = between(rng, scatter * 0.4, scatter * 2.2);
+    if (world.effects.bits.length >= MAX_BITS) world.effects.bits.shift();
+    world.effects.bits.push({
+      kind, x, y,
+      vx: Math.cos(angle) * force + (options.vx ?? 0),
+      vy: Math.sin(angle) * force + (options.vy ?? 0),
+      life: life * between(rng, 0.7, 1.3),
+      full: life * 1.3,
+      size: size * between(rng, 0.65, 1.4),
+      color: tint,
       angle: options.angle ?? 0,
-      rises: kind === 'smoke' || kind === 'dust',
+      floats: kind === 'smoke' || kind === 'dust',
     });
   }
 }
 
-export function addSkid(world, x, y, angle, strength = 1) {
-  if (world.effects.skids.length >= SKID_LIMIT) world.effects.skids.shift();
-  world.effects.skids.push({ x, y, angle, life: 7, strength });
+export function markTire(world, x, y, angle, strength = 1) {
+  if (world.effects.treads.length >= MAX_TREADS) world.effects.treads.shift();
+  world.effects.treads.push({ x, y, angle, life: 7, strength });
 }
 
-export function addFlash(world, color, alpha, life = 0.18) {
-  world.effects.flashes.push({ color, alpha, life, maxLife: life });
+export function screenTint(world, color, opacity, life = 0.18) {
+  world.effects.tints.push({ color, opacity, life, full: life });
 }
 
-export function addLight(world, x, y, color, radius, life = 0.12) {
-  world.effects.lights.push({ x, y, color, radius, life, maxLife: life });
+export function flashLight(world, x, y, color, radius, life = 0.12) {
+  world.effects.flares.push({ x, y, color, radius, life, full: life });
 }
 
-export function updateEffects(world, dt) {
-  const particles = world.effects.particles;
-  for (let i = particles.length - 1; i >= 0; i -= 1) {
-    const particle = particles[i];
-    particle.life -= dt;
-    if (particle.life <= 0) {
-      particles.splice(i, 1);
+export function stepEffects(world, dt) {
+  const bits = world.effects.bits;
+  for (let i = bits.length - 1; i >= 0; i -= 1) {
+    const bit = bits[i];
+    bit.life -= dt;
+    if (bit.life <= 0) {
+      bits.splice(i, 1);
       continue;
     }
-    particle.x += particle.vx * dt;
-    particle.y += particle.vy * dt;
-    if (particle.rises) {
-      particle.vy -= 16 * dt;
-      particle.size += 8 * dt;
+    bit.x += bit.vx * dt;
+    bit.y += bit.vy * dt;
+    if (bit.floats) {
+      bit.vy -= 16 * dt;
+      bit.size += 8 * dt;
     } else {
-      particle.vx *= 1 - dt * 2.4;
-      particle.vy *= 1 - dt * 2.4;
+      bit.vx *= 1 - dt * 2.4;
+      bit.vy *= 1 - dt * 2.4;
     }
   }
 
-  for (const skid of world.effects.skids) {
-    skid.life -= dt;
-  }
-  for (let i = world.effects.skids.length - 1; i >= 0; i -= 1) {
-    if (world.effects.skids[i].life <= 0) world.effects.skids.splice(i, 1);
+  for (let i = world.effects.treads.length - 1; i >= 0; i -= 1) {
+    world.effects.treads[i].life -= dt;
+    if (world.effects.treads[i].life <= 0) world.effects.treads.splice(i, 1);
   }
 
-  for (const name of ['flashes', 'lights']) {
-    const items = world.effects[name];
-    for (let i = items.length - 1; i >= 0; i -= 1) {
-      items[i].life -= dt;
-      if (items[i].life <= 0) items.splice(i, 1);
+  for (const key of ['tints', 'flares']) {
+    for (let i = world.effects[key].length - 1; i >= 0; i -= 1) {
+      world.effects[key][i].life -= dt;
+      if (world.effects[key][i].life <= 0) world.effects[key].splice(i, 1);
     }
   }
 }
 
-export function drawSkids(ctx, world, bounds) {
+export function paintTreads(ctx, world, view) {
   ctx.save();
   ctx.lineWidth = 2.4;
-  for (const skid of world.effects.skids) {
-    if (skid.x < bounds.left || skid.x > bounds.right || skid.y < bounds.top || skid.y > bounds.bottom) continue;
-    ctx.strokeStyle = `rgba(30,28,30,${Math.min(0.4, skid.life / 18) * skid.strength})`;
+  for (const tread of world.effects.treads) {
+    if (tread.x < view.left || tread.x > view.right || tread.y < view.top || tread.y > view.bottom) continue;
+    ctx.strokeStyle = `rgba(30,28,30,${Math.min(0.4, tread.life / 18) * tread.strength})`;
     ctx.beginPath();
-    ctx.moveTo(skid.x, skid.y);
-    ctx.lineTo(skid.x - Math.cos(skid.angle) * 7, skid.y - Math.sin(skid.angle) * 7);
+    ctx.moveTo(tread.x, tread.y);
+    ctx.lineTo(tread.x - Math.cos(tread.angle) * 7, tread.y - Math.sin(tread.angle) * 7);
     ctx.stroke();
   }
   ctx.restore();
 }
 
-export function drawParticles(ctx, world) {
+export function paintBits(ctx, world) {
   ctx.save();
-  for (const particle of world.effects.particles) {
-    const remaining = Math.max(0, particle.life / particle.maxLife);
-    ctx.globalAlpha = Math.min(1, remaining * 1.4);
-    ctx.fillStyle = particle.color;
+  for (const bit of world.effects.bits) {
+    ctx.globalAlpha = Math.min(1, Math.max(0, bit.life / bit.full) * 1.4);
+    ctx.fillStyle = bit.color;
     ctx.beginPath();
-    if (particle.kind === 'muzzle') {
-      ctx.moveTo(
-        particle.x + Math.cos(particle.angle) * particle.size * 2.4,
-        particle.y + Math.sin(particle.angle) * particle.size * 2.4,
-      );
-      ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+    if (bit.kind === 'muzzle') {
+      ctx.moveTo(bit.x + Math.cos(bit.angle) * bit.size * 2.4, bit.y + Math.sin(bit.angle) * bit.size * 2.4);
+      ctx.arc(bit.x, bit.y, bit.size, 0, Math.PI * 2);
     } else {
-      ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+      ctx.arc(bit.x, bit.y, bit.size, 0, Math.PI * 2);
     }
     ctx.fill();
   }
   ctx.restore();
 }
 
-export function drawLights(ctx, world) {
+export function paintFlares(ctx, world) {
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  for (const light of world.effects.lights) {
-    const remaining = light.life / light.maxLife;
-    const glow = ctx.createRadialGradient(light.x, light.y, 0, light.x, light.y, light.radius);
-    glow.addColorStop(0, light.color);
+  for (const flare of world.effects.flares) {
+    const strength = flare.life / flare.full;
+    const glow = ctx.createRadialGradient(flare.x, flare.y, 0, flare.x, flare.y, flare.radius);
+    glow.addColorStop(0, flare.color);
     glow.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.globalAlpha = remaining * 0.55;
+    ctx.globalAlpha = strength * 0.55;
     ctx.fillStyle = glow;
     ctx.beginPath();
-    ctx.arc(light.x, light.y, light.radius, 0, Math.PI * 2);
+    ctx.arc(flare.x, flare.y, flare.radius, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
 }
 
-export function drawFlashes(ctx, world) {
-  for (const flash of world.effects.flashes) {
-    const remaining = flash.life / flash.maxLife;
+export function paintTints(ctx, world) {
+  for (const tint of world.effects.tints) {
     ctx.save();
-    ctx.globalAlpha = flash.alpha * remaining;
-    ctx.fillStyle = flash.color;
+    ctx.globalAlpha = tint.opacity * Math.max(0, tint.life / tint.full);
+    ctx.fillStyle = tint.color;
     ctx.fillRect(0, 0, 1280, 720);
     ctx.restore();
   }
 }
-
-export const EFFECT_COLORS = Object.freeze({
-  smoke: '#6c6c6c',
-  spark: COLORS.gold,
-  fire: '#ff7a3d',
-  dust: '#d7c49a',
-  blood: '#b34b4b',
-  glass: '#b8e7ef',
-});
