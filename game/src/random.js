@@ -10,19 +10,3 @@ export function createRandom(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-
-export function between(random, low, high) {
-  return low + random() * (high - low);
-}
-
-export function whole(random, low, high) {
-  return Math.floor(between(random, low, high + 1));
-}
-
-export function pick(random, list) {
-  return list[Math.min(list.length - 1, Math.floor(random() * list.length))];
-}
-
-export function chance(random, probability) {
-  return random() < probability;
-}

@@ -1,17 +1,39 @@
-import { CITY_NAME, COLORS, FIELD, FONT, PALETTE } from './config.js';
-import { drawCity } from './city-render.js';
-import { drawPlayer } from './entity-render.js';
+// Drawing only: the world's state and the current screen in, pixels out. The 1280x720 playfield
+// is scaled to fit the window and centred, the margin filled with the backdrop colour. Flat
+// rectangles and circles, canvas text for the HUD and the panels. Text that holds a number is
+// rebuilt only when the number changes, so a frame allocates nothing.
+import { FIELD, FONT, LIVES, PALETTE } from './config.js';
+import { KIND_COIN } from './world.js';
 
 export const SCREEN_TITLE = 'title';
 export const SCREEN_PLAY = 'play';
 export const SCREEN_PAUSED = 'paused';
 export const SCREEN_OVER = 'over';
 
-const PANEL = { width: 620, height: 250 };
+/** The panel's width; its height grows with its lines: room for the title, the lines and the prompt. */
+const PANEL = { width: 600, top: 134, line: 34, bottom: 70 };
+const LIFE_SIZE = 20;
+const LIFE_GAP = 8;
+
+function cachedLabel(prefix) {
+  let value = -1;
+  let text = '';
+  return function label(next) {
+    if (next !== value) {
+      value = next;
+      text = prefix + next;
+    }
+    return text;
+  };
+}
 
 export function createRenderer(canvas) {
   const context = canvas.getContext('2d');
   const view = { scale: 1, x: 0, y: 0 };
+  const scoreLabel = cachedLabel('Score ');
+  const levelLabel = cachedLabel('Level ');
+  const finalLabel = cachedLabel('Score ');
+  const bestLabel = cachedLabel('Best ');
 
   function resize() {
     const ratio = window.devicePixelRatio || 1;
@@ -33,99 +55,87 @@ export function createRenderer(canvas) {
     context.fillText(value, x, y);
   }
 
-  function bar(x, y, width, height, amount, color) {
-    context.fillStyle = 'rgba(16, 22, 30, 0.72)';
-    context.fillRect(x, y, width, height);
-    context.fillStyle = color;
-    context.fillRect(x + 2, y + 2, Math.max(0, (width - 4) * Math.min(1, Math.max(0, amount))), height - 4);
-    context.strokeStyle = 'rgba(255, 255, 255, 0.28)';
-    context.lineWidth = 1;
-    context.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
-  }
-
-  function basicHud(state) {
-    context.textBaseline = 'top';
-    context.fillStyle = 'rgba(16, 22, 30, 0.66)';
-    context.fillRect(16, 14, 258, 84);
-    bar(28, 26, 150, 12, state.player.health / 100, '#e2584c');
-    bar(28, 44, 150, 10, state.player.armor / 100, '#62a9d8');
-    text(`${Math.max(0, Math.round(state.player.health))}`, 186, 22, 17, PALETTE.text, 'left');
-    text(`$${Math.max(0, Math.round(state.player.cash))}`, 28, 62, 21, '#f2c94c', 'left');
-    text(state.weapon || 'fists', 126, 64, 16, PALETTE.muted, 'left');
-    text(state.area, FIELD.width / 2, 22, 22, PALETTE.text, 'center');
-    context.textBaseline = 'bottom';
-    text('WASD walk  SHIFT run  MOUSE aim  ESC pause', 20, FIELD.height - 16, 15, 'rgba(255,255,255,0.82)', 'left');
-    text(state.environment.state.clock, FIELD.width - 20, FIELD.height - 16, 15, 'rgba(255,255,255,0.82)', 'right');
-  }
-
-  function titleArt(state) {
-    context.fillStyle = 'rgba(11, 18, 34, 0.62)';
+  function drawField(state) {
+    context.fillStyle = PALETTE.sky;
     context.fillRect(0, 0, FIELD.width, FIELD.height);
-    const sun = context.createLinearGradient(0, 130, 0, 340);
-    sun.addColorStop(0, '#ffd77a');
-    sun.addColorStop(1, '#f0785e');
-    context.fillStyle = sun;
-    context.beginPath();
-    context.arc(FIELD.width / 2, 226, 104, 0, Math.PI * 2);
-    context.fill();
-    context.fillStyle = 'rgba(11, 18, 34, 0.55)';
-    for (let index = 0; index < 5; index += 1) {
-      context.fillRect(FIELD.width / 2 - 104, 234 + index * 18, 208, 6 + index * 2);
+    context.fillStyle = PALETTE.ground;
+    context.fillRect(0, FIELD.groundY, FIELD.width, FIELD.height - FIELD.groundY);
+
+    const items = state.items;
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      if (!item.active) continue;
+      if (item.kind === KIND_COIN) {
+        context.fillStyle = PALETTE.coin;
+        context.beginPath();
+        context.arc(item.x + item.width / 2, item.y + item.height / 2, item.width / 2, 0, Math.PI * 2);
+        context.fill();
+      } else {
+        context.fillStyle = PALETTE.block;
+        context.fillRect(item.x, item.y, item.width, item.height);
+      }
     }
-    context.textBaseline = 'alphabetic';
-    text(CITY_NAME.toUpperCase(), FIELD.width / 2, 214, 74, '#fff6dc', 'center');
-    text('A sun-soaked city with nowhere to hide', FIELD.width / 2, 372, 23, '#f5e3c8', 'center');
-    text('WASD to walk  ·  SHIFT to run  ·  MOUSE to look around', FIELD.width / 2, 430, 18, '#d6e4ec', 'center');
-    text('Press SPACE or click to explore', FIELD.width / 2, 500, 25, '#ffd77a', 'center');
+
+    const player = state.player;
+    // Blink while invulnerable after a hit: hidden on every other tenth of a second.
+    if (player.invulnerable === 0 || Math.floor(player.invulnerable * 10) % 2 === 1) {
+      context.fillStyle = PALETTE.player;
+      context.fillRect(player.x, player.y, player.width, player.height);
+    }
   }
 
-  function panel(heading, line, prompt) {
+  function drawHud(state) {
+    context.textBaseline = 'top';
+    text(scoreLabel(state.score), 24, 20, 28, PALETTE.text, 'left');
+    text(levelLabel(state.level), FIELD.width / 2, 20, 28, PALETTE.text, 'center');
+    const firstLife = FIELD.width - 24 - LIVES * (LIFE_SIZE + LIFE_GAP) + LIFE_GAP;
+    text('Lives', firstLife - 12, 20, 28, PALETTE.text, 'right');
+    for (let life = 0; life < LIVES; life += 1) {
+      context.fillStyle = life < state.lives ? PALETTE.player : PALETTE.ground;
+      context.fillRect(firstLife + life * (LIFE_SIZE + LIFE_GAP), 24, LIFE_SIZE, LIFE_SIZE);
+    }
+  }
+
+  function drawPanel(title, lines, prompt) {
+    const height = PANEL.top + lines.length * PANEL.line + PANEL.bottom;
     const x = (FIELD.width - PANEL.width) / 2;
-    const y = (FIELD.height - PANEL.height) / 2;
+    const y = (FIELD.height - height) / 2;
     context.fillStyle = PALETTE.panel;
-    context.fillRect(x, y, PANEL.width, PANEL.height);
-    context.strokeStyle = '#f2c94c';
-    context.lineWidth = 2;
-    context.strokeRect(x + 1, y + 1, PANEL.width - 2, PANEL.height - 2);
+    context.fillRect(x, y, PANEL.width, height);
     context.textBaseline = 'alphabetic';
-    text(heading, FIELD.width / 2, y + 88, 44, PALETTE.text, 'center');
-    text(line, FIELD.width / 2, y + 146, 21, PALETTE.muted, 'center');
-    text(prompt, FIELD.width / 2, y + 208, 22, PALETTE.coin, 'center');
+    text(title, FIELD.width / 2, y + 78, 48, PALETTE.text, 'center');
+    for (let index = 0; index < lines.length; index += 1) {
+      text(lines[index], FIELD.width / 2, y + PANEL.top + index * PANEL.line, 22, PALETTE.muted, 'center');
+    }
+    text(prompt, FIELD.width / 2, y + height - 40, 24, PALETTE.coin, 'center');
   }
 
-  function draw(state, screen, best, extras) {
+  const TITLE_LINES = ['Dodge the red blocks. Catch the gold coins.', 'Move with ← → or A D.  Pause with P.', ''];
+  const PAUSED_LINES = ['The blocks will wait for you.'];
+  const OVER_LINES = ['', ''];
+
+  /** Paint one frame: the field, then the HUD or a panel for the screen the game is on. */
+  function draw(state, screen, best) {
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.fillStyle = PALETTE.backdrop;
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
-    const camera = state.camera.state;
-    const shake = state.camera.offset();
-    context.save();
-    context.translate(FIELD.width / 2 - camera.x + shake.x, FIELD.height / 2 - camera.y + shake.y);
-    drawCity(context, state.city, camera, state.environment.state, state.elapsed);
-    if (extras && extras.entities) {
-      for (let index = 0; index < extras.entities.length; index += 1) extras.entities[index](context, state);
+    drawField(state);
+    if (screen === SCREEN_TITLE) {
+      TITLE_LINES[2] = bestLabel(best);
+      drawPanel('Block Dodger', TITLE_LINES, 'Press Space or click to start');
+      return;
     }
-    drawPlayer(context, state.player, state.environment.state);
-    context.restore();
-    const daylight = state.environment.state.daylight;
-    if (daylight < 1) {
-      context.fillStyle = `rgba(18, 28, 62, ${((1 - daylight) * 0.5).toFixed(3)})`;
-      context.fillRect(0, 0, FIELD.width, FIELD.height);
+    drawHud(state);
+    if (screen === SCREEN_PAUSED) drawPanel('Paused', PAUSED_LINES, 'Press P to resume');
+    else if (screen === SCREEN_OVER) {
+      OVER_LINES[0] = finalLabel(state.score);
+      OVER_LINES[1] = bestLabel(best);
+      drawPanel('Game over', OVER_LINES, 'Press Space or click to play again');
     }
-    if (extras && extras.hud) {
-      for (let index = 0; index < extras.hud.length; index += 1) extras.hud[index](context, state);
-    } else if (screen !== SCREEN_TITLE) {
-      basicHud(state);
-    }
-    if (screen === SCREEN_TITLE) titleArt(state);
-    else if (screen === SCREEN_PAUSED) panel('Taking a breather', 'The city waits right where you left it.', 'Press ESC or SPACE to carry on');
-    else if (screen === SCREEN_OVER) panel('Wasted', `Your last score was ${Math.round(state.score)}.`, 'Press SPACE to start again');
   }
 
   resize();
   window.addEventListener('resize', resize);
-  return { draw, resize, view };
+  return { draw };
 }
-
-export const createGameRenderer = createRenderer;
