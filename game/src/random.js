@@ -10,25 +10,3 @@ export function createRandom(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-
-export function between(random, low, high) {
-  return low + random() * (high - low);
-}
-
-export function integer(random, low, high) {
-  return Math.floor(between(random, low, high + 1));
-}
-
-export function choose(random, list) {
-  return list[Math.min(list.length - 1, Math.floor(random() * list.length))];
-}
-
-export function chance(random, probability) {
-  return random() < probability;
-}
-
-export function gridHash(x, y, salt = 0) {
-  let h = Math.imul(x + 1013, 374761393) ^ Math.imul(y + 2719, 668265263) ^ Math.imul(salt + 7, 2246822519);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}

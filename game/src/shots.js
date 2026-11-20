@@ -77,38 +77,3 @@ export function stageShot(name, world) {
   const over = world.state.lives === 0;
   return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
 }
-
-import { CITY, SCREENS } from './config.js';
-import { updateCamera } from './camera.js';
-
-export function stageSolaraShot(name, api) {
-  const world = api.world;
-  const camera = api.camera;
-  world.intro = 1;
-  world.elapsed = 7.4;
-  world.controlsOpen = false;
-  if (name === 'start') {
-    world.screen = SCREENS.title;
-    world.menuIndex = 0;
-    world.time = 17.1;
-    return;
-  }
-  world.screen = SCREENS.play;
-  world.menuIndex = 0;
-  world.time = name === 'chase' ? 18.1 : 10.6;
-  const avenue = 6 * CITY.cell + CITY.road / 2;
-  const cross = 7 * CITY.cell + CITY.road / 2;
-  world.player.x = avenue + 26;
-  world.player.y = cross + 18;
-  world.player.angle = -0.15;
-  world.player.vx = 0;
-  world.player.vy = 0;
-  world.player.health = 100;
-  world.wanted = name === 'chase' ? 3 : 0;
-  world.heat = name === 'chase' ? 34 : 0;
-  updateCamera(camera, world.player, 1 / 60, 0);
-  api.systems.missions?.stageShot?.(name, api);
-  api.systems.vehicles?.stageShot?.(name, api);
-  api.systems.police?.stageShot?.(name, api);
-  api.systems.hud?.stageShot?.(name, api);
-}
