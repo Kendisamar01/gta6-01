@@ -132,3 +132,13 @@ function runGame() {
 
 if (shot) runShot(shot);
 else runGame();
+
+import { bootSolara } from './engine.js';
+document.title = 'Solara Bay — open-world city crime';
+const gameCanvas = document.getElementById('game');
+if (gameCanvas) gameCanvas.setAttribute('aria-label', 'Solara Bay: walk, drive and explore a sunlit coastal city');
+bootSolara();
+import { bindSolaraSystems } from './world.js';
+window.__solaraSystemBinder = bindSolaraSystems;
+import { hasSave } from './save.js';
+window.__solaraHasSave = hasSave;

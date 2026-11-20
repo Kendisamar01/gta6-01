@@ -6,21 +6,21 @@ import { fileURLToPath } from 'node:url';
 const root = dirname(fileURLToPath(import.meta.url));
 const chrome = process.env.CHROME_BIN
   || '/workspace/.cache/puppeteer/chrome-headless-shell/linux-157.0.8103.78/chrome-headless-shell-linux64/chrome-headless-shell';
-const shots = JSON.parse(readFileSync(join(root, 'shots.json'), 'utf8'));
-const serverPort = 8137;
-const baseUrl = `http://127.0.0.1:${serverPort}`;
+const entries = JSON.parse(readFileSync(join(root, 'shots.json'), 'utf8'));
+const port = 8151;
+const debugPort = 9251;
+const base = `http://127.0.0.1:${port}`;
 const width = 1280;
 const height = 720;
 const maxBytes = 200 * 1024;
-const profiles = [];
+const profile = mkdtempSync('/tmp/opencode/solara-capture-');
 let server = null;
+let browser = null;
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function waitFor(url, timeout = 12000) {
-  const deadline = Date.now() + timeout;
+async function waitFor(url, limit = 15000) {
+  const deadline = Date.now() + limit;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(url);
@@ -32,21 +32,96 @@ async function waitFor(url, timeout = 12000) {
   throw new Error(`timed out waiting for ${url}`);
 }
 
-async function json(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`bad response from ${url}`);
-  return response.json();
-}
-
-function startServer() {
-  return spawn(process.execPath, ['serve.ts', '--port', String(serverPort)], {
-    cwd: root,
-    stdio: 'ignore',
+async function connect() {
+  const list = await fetch(`http://127.0.0.1:${debugPort}/json/list`).then((response) => response.json());
+  const page = list.find((target) => target.type === 'page');
+  if (!page) throw new Error('headless Chrome exposed no page');
+  const socket = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    socket.addEventListener('open', resolve, { once: true });
+    socket.addEventListener('error', reject, { once: true });
   });
+  let serial = 0;
+  const waiting = new Map();
+  socket.addEventListener('message', (message) => {
+    const data = JSON.parse(message.data);
+    const pending = waiting.get(data.id);
+    if (!pending) return;
+    waiting.delete(data.id);
+    if (data.error) pending.reject(new Error(data.error.message || 'DevTools error'));
+    else pending.resolve(data.result);
+  });
+  return {
+    send(method, params = {}) {
+      serial += 1;
+      const id = serial;
+      return new Promise((resolve, reject) => {
+        waiting.set(id, { resolve, reject });
+        socket.send(JSON.stringify({ id, method, params }));
+      });
+    },
+    close() {
+      socket.close();
+    },
+  };
 }
 
-function startBrowser(profile, debugPort) {
-  const args = [
+async function waitReady(session, query) {
+  await sleep(180);
+  const expression = `Boolean(location.search === ${JSON.stringify(query)} && window.__shotReady && window.__modulesReady && document.readyState === "complete")`;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    const result = await session.send('Runtime.evaluate', {
+      expression,
+      returnByValue: true,
+    });
+    if (result.result && result.result.value === true) return;
+    await sleep(50);
+  }
+  throw new Error('game never became ready');
+}
+
+function jpegDimensions(bytes) {
+  let offset = 2;
+  while (offset + 8 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = bytes[offset + 1];
+    offset += 2;
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    const length = bytes.readUInt16BE(offset);
+    const frame = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (frame) return { width: bytes.readUInt16BE(offset + 5), height: bytes.readUInt16BE(offset + 3) };
+    if (length < 2) break;
+    offset += length;
+  }
+  return null;
+}
+
+async function capture(session, entry) {
+  await session.send('Page.navigate', { url: `${base}/${entry.query}` });
+  await waitReady(session, entry.query);
+  await sleep(220);
+  for (const quality of [85, 76, 68]) {
+    const result = await session.send('Page.captureScreenshot', {
+      format: 'jpeg',
+      quality,
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    const bytes = Buffer.from(result.data, 'base64');
+    const size = jpegDimensions(bytes);
+    if (!size || size.width !== width || size.height !== height) throw new Error(`${entry.name} is not ${width}x${height}`);
+    if (bytes.length <= maxBytes) return bytes;
+  }
+  throw new Error(`${entry.name} is still too large`);
+}
+
+try {
+  server = spawn(process.execPath, ['serve.ts', '--port', String(port)], { cwd: root, stdio: 'ignore' });
+  await waitFor(base);
+  browser = spawn(chrome, [
     '--headless',
     '--no-sandbox',
     '--disable-gpu',
@@ -61,138 +136,31 @@ function startBrowser(profile, debugPort) {
     `--remote-debugging-port=${debugPort}`,
     `--user-data-dir=${profile}`,
     'about:blank',
-  ];
-  return spawn(chrome, args, {
-    env: { ...process.env, LD_LIBRARY_PATH: '/workspace/chrome-libs' },
-    stdio: 'ignore',
+  ], { env: { ...process.env, LD_LIBRARY_PATH: '/workspace/chrome-libs' }, stdio: 'ignore' });
+  await waitFor(`http://127.0.0.1:${debugPort}/json/version`);
+  const session = await connect();
+  await session.send('Page.enable');
+  await session.send('Runtime.enable');
+  await session.send('Emulation.setDeviceMetricsOverride', {
+    width,
+    height,
+    deviceScaleFactor: 1,
+    mobile: false,
+    screenWidth: width,
+    screenHeight: height,
   });
-}
-
-async function openSession(wsUrl) {
-  const socket = new WebSocket(wsUrl);
-  await new Promise((resolve, reject) => {
-    socket.addEventListener('open', resolve, { once: true });
-    socket.addEventListener('error', reject, { once: true });
-  });
-  let serial = 1;
-  const pending = new Map();
-  socket.addEventListener('message', (event) => {
-    const message = JSON.parse(event.data);
-    const request = pending.get(message.id);
-    if (!request) return;
-    pending.delete(message.id);
-    if (message.error) request.reject(new Error(message.error.message || 'DevTools error'));
-    else request.resolve(message.result);
-  });
-  function send(method, params = {}) {
-    const id = serial++;
-    return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      socket.send(JSON.stringify({ id, method, params }));
-    });
-  }
-  return { send, close: () => socket.close() };
-}
-
-async function waitReady(session) {
-  const expression = 'Boolean(window.__shotReady && window.__modulesReady && document.readyState === "complete")';
-  for (let attempt = 0; attempt < 260; attempt += 1) {
-    const result = await session.send('Runtime.evaluate', { expression, returnByValue: true });
-    if (result.result && result.result.value === true) return;
-    await sleep(50);
-  }
-  throw new Error('game never became ready');
-}
-
-function jpegSize(buffer) {
-  let offset = 2;
-  while (offset + 4 < buffer.length) {
-    if (buffer[offset] !== 0xff) {
-      offset += 1;
-      continue;
-    }
-    const marker = buffer[offset + 1];
-    offset += 2;
-    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
-    if (offset + 2 > buffer.length) break;
-    const length = buffer.readUInt16BE(offset);
-    const sof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
-    if (sof) return { width: buffer.readUInt16BE(offset + 5), height: buffer.readUInt16BE(offset + 3) };
-    if (length < 2) break;
-    offset += length;
-  }
-  return null;
-}
-
-async function capture(entry, index, quality) {
-  const debugPort = 9237 + index;
-  const profile = mkdtempSync(join(root, '.capture-profile-'));
-  profiles.push(profile);
-  let browser = null;
-  let session = null;
-  try {
-    browser = startBrowser(profile, debugPort);
-    await waitFor(`http://127.0.0.1:${debugPort}/json/version`);
-    let targets = await json(`http://127.0.0.1:${debugPort}/json/list`);
-    for (let attempt = 0; attempt < 60 && !targets.some((target) => target.type === 'page'); attempt += 1) {
-      await sleep(80);
-      targets = await json(`http://127.0.0.1:${debugPort}/json/list`);
-    }
-    const page = targets.find((target) => target.type === 'page');
-    if (!page) throw new Error('headless Chrome did not open a page');
-    session = await openSession(page.webSocketDebuggerUrl);
-    await session.send('Page.enable');
-    await session.send('Runtime.enable');
-    await session.send('Emulation.setDeviceMetricsOverride', {
-      width,
-      height,
-      deviceScaleFactor: 1,
-      mobile: false,
-      screenWidth: width,
-      screenHeight: height,
-    });
-    await session.send('Page.navigate', { url: `${baseUrl}/${entry.query}` });
-    await waitReady(session);
-    await sleep(180);
-    const result = await session.send('Page.captureScreenshot', {
-      format: 'jpeg',
-      quality,
-      fromSurface: true,
-      captureBeyondViewport: false,
-    });
-    const buffer = Buffer.from(result.data, 'base64');
-    const size = jpegSize(buffer);
-    if (!size || size.width !== width || size.height !== height) {
-      throw new Error(`${entry.name} is not ${width}x${height}`);
-    }
-    if (buffer.length > maxBytes) {
-      if (quality > 68) return capture(entry, index, Math.max(68, quality - 12));
-      throw new Error(`${entry.name} is ${buffer.length} bytes, over the ${maxBytes} byte limit`);
-    }
-    return { name: entry.name, buffer };
-  } finally {
-    if (session) session.close();
-    if (browser) browser.kill('SIGKILL');
-    await sleep(180);
-    rmSync(profile, { recursive: true, force: true });
-  }
-}
-
-try {
-  server = startServer();
-  await waitFor(baseUrl);
+  mkdirSync(join(root, 'screenshots'), { recursive: true });
   const captured = [];
-  for (let index = 0; index < shots.length; index += 1) {
-    const entry = shots[index];
-    captured.push(await capture(entry, index, 84));
+  for (const entry of entries) {
+    captured.push({ name: entry.name, bytes: await capture(session, entry) });
     console.log(`captured ${entry.name}`);
   }
-  mkdirSync(join(root, 'screenshots'), { recursive: true });
-  for (const item of captured) {
-    writeFileSync(join(root, 'screenshots', item.name), item.buffer);
-  }
+  for (const shot of captured) writeFileSync(join(root, 'screenshots', shot.name), shot.bytes);
+  session.close();
   console.log(`wrote ${captured.length} screenshots`);
 } finally {
+  if (browser) browser.kill('SIGKILL');
   if (server) server.kill('SIGKILL');
-  for (const profile of profiles) rmSync(profile, { recursive: true, force: true });
+  await sleep(200);
+  rmSync(profile, { recursive: true, force: true });
 }

@@ -139,3 +139,113 @@ export function createRenderer(canvas) {
   window.addEventListener('resize', resize);
   return { draw };
 }
+
+import { SOLARA } from './config.js';
+
+export function createSolaraRenderer(canvas) {
+  const context = canvas.getContext('2d');
+  const view = { scale: 1, x: 0, y: 0, canvas };
+  function resize() {
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    const width = Math.max(1, Math.round(window.innerWidth * ratio));
+    const height = Math.max(1, Math.round(window.innerHeight * ratio));
+    canvas.width = width;
+    canvas.height = height;
+    view.scale = Math.min(width / FIELD.width, height / FIELD.height);
+    view.x = (width - FIELD.width * view.scale) / 2;
+    view.y = (height - FIELD.height * view.scale) / 2;
+  }
+  function begin() {
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.fillStyle = '#0c141d';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
+    context.save();
+    return context;
+  }
+  function end() {
+    context.restore();
+    context.setTransform(1, 0, 0, 1, 0, 0);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+  return { context, view, resize, begin, end };
+}
+
+const fontCache = new Map();
+export function solaraText(ctx, value, x, y, size, color, align = 'left', baseline = 'alphabetic', weight = '') {
+  const key = `${size}|${weight}`;
+  if (!fontCache.has(key)) fontCache.set(key, `${weight} ${size}px ${FONT}`.trim());
+  ctx.font = fontCache.get(key);
+  ctx.fillStyle = color;
+  ctx.textAlign = align;
+  ctx.textBaseline = baseline;
+  ctx.fillText(value, x, y);
+}
+
+export function solaraPanel(ctx, x, y, w, h, fill = SOLARA.panel, stroke = SOLARA.accent) {
+  ctx.fillStyle = fill;
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, 12);
+  ctx.fill();
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+}
+
+export function drawSolaraTitle(ctx, world) {
+  const t = world.elapsed;
+  const sky = ctx.createLinearGradient(0, 0, 0, FIELD.height);
+  sky.addColorStop(0, '#123049');
+  sky.addColorStop(0.5, '#33769a');
+  sky.addColorStop(0.72, '#f2a35e');
+  sky.addColorStop(1, '#f6cf8e');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, FIELD.width, FIELD.height);
+  ctx.fillStyle = 'rgba(255,232,166,0.85)';
+  ctx.beginPath();
+  ctx.arc(978, 246, 92, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#20536d';
+  for (let i = 0; i < 26; i += 1) {
+    const bw = 26 + ((i * 37) % 30);
+    const bh = 48 + ((i * 71) % 170);
+    ctx.fillRect(i * 52 - 20, 458 - bh, bw, bh);
+  }
+  ctx.fillStyle = '#163d55';
+  ctx.fillRect(0, 455, FIELD.width, 265);
+  for (let row = 0; row < 7; row += 1) {
+    const y = 462 + row * 38;
+    ctx.strokeStyle = `rgba(255,255,255,${0.19 - row * 0.018})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x <= FIELD.width; x += 16) {
+      const wave = Math.sin(x * 0.012 + t * 1.6 + row * 0.7) * (4 + row * 0.6);
+      if (x === 0) ctx.moveTo(x, y + wave);
+      else ctx.lineTo(x, y + wave);
+    }
+    ctx.stroke();
+  }
+  ctx.fillStyle = 'rgba(8,20,28,0.35)';
+  ctx.fillRect(0, 0, FIELD.width, FIELD.height);
+  ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur = 22;
+  solaraText(ctx, 'SOLARA', FIELD.width / 2, 236, 94, SOLARA.text, 'center', 'alphabetic', '800');
+  solaraText(ctx, 'BAY', FIELD.width / 2, 328, 94, SOLARA.accent, 'center', 'alphabetic', '800');
+  ctx.shadowBlur = 0;
+  solaraText(ctx, 'SUN, SPEED AND OTHER BAD DECISIONS', FIELD.width / 2, 374, 20, '#dce9ec', 'center');
+  solaraPanel(ctx, 414, 432, 452, 208, 'rgba(10,24,34,0.78)', 'rgba(255,209,102,0.55)');
+  const options = ['NEW GAME', 'CONTINUE', 'CONTROLS'];
+  for (let i = 0; i < options.length; i += 1) {
+    const active = i === (world.menuIndex || 0);
+    if (active) {
+      ctx.fillStyle = 'rgba(255,209,102,0.16)';
+      ctx.fillRect(438, 462 + i * 48, 404, 38);
+    }
+    solaraText(ctx, options[i], FIELD.width / 2, 488 + i * 48, active ? 24 : 21, active ? SOLARA.accent : '#c7d5d9', 'center', 'alphabetic', active ? '700' : '');
+  }
+  solaraText(ctx, 'WASD move   MOUSE aim   CLICK attack   E car   ESC menu', FIELD.width / 2, 690, 16, '#c6d5d8', 'center');
+}
