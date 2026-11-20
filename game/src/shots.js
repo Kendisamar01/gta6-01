@@ -5,6 +5,8 @@
 import { FIELD, PLAYER, STEP } from './config.js';
 import { EVENT_OVER, KIND_BLOCK } from './world.js';
 import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+import { WALKER, WORLD } from './config.js';
+import { missionAt } from './story.js';
 
 const START_SECONDS = 5;
 const PLAY_SECONDS = 26;
@@ -77,3 +79,75 @@ export function stageShot(name, world) {
   const over = world.state.lives === 0;
   return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
 }
+
+function shotControls(x, y) {
+  return { x, y, run: false, aim: null, attack: false, actions: 0, handbrake: false, horn: false, weapon: 0 };
+}
+
+function shotSettle(world, seconds, x, y, harmless) {
+  const steps = Math.max(1, Math.floor(seconds / STEP));
+  for (let index = 0; index < steps; index += 1) world.step(STEP, shotControls(x, y), Boolean(harmless));
+}
+
+function shotCar(state, x, y, type, angle, color) {
+  const vehicles = state.systems.vehicles;
+  const point = vehicles.freePoint(x, y, 46) || { x, y };
+  const car = vehicles.spawn(type, point.x, point.y, angle);
+  car.color = color;
+  car.parked = false;
+  car.occupiedBy = 'player';
+  car.driver = state.player;
+  car.aiInput = null;
+  state.player.inVehicle = car;
+  return car;
+}
+
+stageShot = function (name, world) {
+  world.reset();
+  const state = world.state;
+  if (name === 'drive') {
+    const car = shotCar(state, WALKER.startX, WALKER.startY, 'sport', 0, '#e04d46');
+    car.speed = 132;
+    state.systems.wanted.set(1);
+    state.systems.toast('Sunstrand Boulevard is open.');
+    shotSettle(world, 1.6, 0, -1, false);
+    state.camera.snap(state.player);
+    return { screen: SCREEN_PLAY, best: 0 };
+  }
+  if (name === 'chase') {
+    const car = shotCar(state, WALKER.startX - WORLD.cell, WALKER.startY + WORLD.cell, 'sport', -Math.PI / 2, '#f0b43c');
+    car.speed = 168;
+    car.hp = 240;
+    car.maxHp = 240;
+    state.systems.combat.give('smg', 96);
+    state.systems.wanted.set(4);
+    const cruiser = state.systems.vehicles.spawn('cruiser', state.player.x + 250, state.player.y - 170, Math.PI);
+    cruiser.siren = true;
+    cruiser.police = true;
+    cruiser.speed = 110;
+    state.systems.toast('Four stars. Lose the patrol before they box you in.');
+    shotSettle(world, 2.4, 0.18, -1, false);
+    state.systems.combat.spawnBullet(state.player.x, state.player.y, -0.4, 620, 'player', 14, '#fff0b0');
+    state.camera.snap(state.player);
+    return { screen: SCREEN_PLAY, best: 0 };
+  }
+  if (name === 'mission') {
+    const data = missionAt(3);
+    state.mission.index = 3;
+    state.systems.missions.startMission();
+    const target = data.steps[0].target;
+    state.player.x = target.x;
+    state.player.y = target.y;
+    state.player.health = 100;
+    state.player.armor = 60;
+    state.systems.combat.give('pistol', 60);
+    state.camera.snap(state.player);
+    shotSettle(world, 0.55, 0, 0, false);
+    shotSettle(world, 0.9, 0, 0, false);
+    state.systems.toast('Clear the Ironworks yard.');
+    state.camera.snap(state.player);
+    return { screen: SCREEN_PLAY, best: 0 };
+  }
+  shotSettle(world, 0.5, 0, 0, true);
+  return { screen: SCREEN_TITLE, best: 0 };
+};
