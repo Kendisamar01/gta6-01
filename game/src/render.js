@@ -1,141 +1,150 @@
-// Drawing only: the world's state and the current screen in, pixels out. The 1280x720 playfield
-// is scaled to fit the window and centred, the margin filled with the backdrop colour. Flat
-// rectangles and circles, canvas text for the HUD and the panels. Text that holds a number is
-// rebuilt only when the number changes, so a frame allocates nothing.
-import { FIELD, FONT, LIVES, PALETTE } from './config.js';
-import { KIND_COIN } from './world.js';
+import { FONT, PALETTE, VIEW } from './config.js';
+import { drawCity } from './city-render.js';
+import { drawEntities } from './entity-render.js';
 
 export const SCREEN_TITLE = 'title';
 export const SCREEN_PLAY = 'play';
 export const SCREEN_PAUSED = 'paused';
 export const SCREEN_OVER = 'over';
 
-/** The panel's width; its height grows with its lines: room for the title, the lines and the prompt. */
-const PANEL = { width: 600, top: 134, line: 34, bottom: 70 };
-const LIFE_SIZE = 20;
-const LIFE_GAP = 8;
-
-function cachedLabel(prefix) {
-  let value = -1;
-  let text = '';
-  return function label(next) {
-    if (next !== value) {
-      value = next;
-      text = prefix + next;
-    }
-    return text;
-  };
-}
+const TITLE_OPTIONS = ['New Game', 'Continue', 'Controls'];
+const PAUSE_OPTIONS = ['Resume', 'Controls', 'Save Game', 'Load Game', 'Quit to Title'];
 
 export function createRenderer(canvas) {
   const context = canvas.getContext('2d');
-  const view = { scale: 1, x: 0, y: 0 };
-  const scoreLabel = cachedLabel('Score ');
-  const levelLabel = cachedLabel('Level ');
-  const finalLabel = cachedLabel('Score ');
-  const bestLabel = cachedLabel('Best ');
+  canvas.width = VIEW.width;
+  canvas.height = VIEW.height;
 
-  function resize() {
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.round(window.innerWidth * ratio);
-    const height = Math.round(window.innerHeight * ratio);
-    canvas.width = width;
-    canvas.height = height;
-    view.scale = Math.min(width / FIELD.width, height / FIELD.height);
-    view.x = (width - FIELD.width * view.scale) / 2;
-    view.y = (height - FIELD.height * view.scale) / 2;
-  }
+  const overlays = [];
+  const worldLayers = [];
 
-  const fonts = new Map();
-  function text(value, x, y, size, color, align) {
-    if (!fonts.has(size)) fonts.set(size, `${size}px ${FONT}`);
-    context.font = fonts.get(size);
+  function text(value, x, y, size, color, align = 'left', weight = '') {
+    context.font = `${weight} ${size}px ${FONT}`.trim();
     context.fillStyle = color;
     context.textAlign = align;
+    context.textBaseline = 'alphabetic';
     context.fillText(value, x, y);
   }
 
-  function drawField(state) {
-    context.fillStyle = PALETTE.sky;
-    context.fillRect(0, 0, FIELD.width, FIELD.height);
-    context.fillStyle = PALETTE.ground;
-    context.fillRect(0, FIELD.groundY, FIELD.width, FIELD.height - FIELD.groundY);
-
-    const items = state.items;
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      if (!item.active) continue;
-      if (item.kind === KIND_COIN) {
-        context.fillStyle = PALETTE.coin;
-        context.beginPath();
-        context.arc(item.x + item.width / 2, item.y + item.height / 2, item.width / 2, 0, Math.PI * 2);
-        context.fill();
-      } else {
-        context.fillStyle = PALETTE.block;
-        context.fillRect(item.x, item.y, item.width, item.height);
-      }
-    }
-
-    const player = state.player;
-    // Blink while invulnerable after a hit: hidden on every other tenth of a second.
-    if (player.invulnerable === 0 || Math.floor(player.invulnerable * 10) % 2 === 1) {
-      context.fillStyle = PALETTE.player;
-      context.fillRect(player.x, player.y, player.width, player.height);
-    }
+  function bar(x, y, width, height, value, maximum, color) {
+    context.fillStyle = 'rgba(10,20,28,0.78)';
+    context.fillRect(x, y, width, height);
+    context.fillStyle = color;
+    context.fillRect(x + 2, y + 2, Math.max(0, (width - 4) * Math.min(1, value / maximum)), height - 4);
   }
 
-  function drawHud(state) {
-    context.textBaseline = 'top';
-    text(scoreLabel(state.score), 24, 20, 28, PALETTE.text, 'left');
-    text(levelLabel(state.level), FIELD.width / 2, 20, 28, PALETTE.text, 'center');
-    const firstLife = FIELD.width - 24 - LIVES * (LIFE_SIZE + LIFE_GAP) + LIFE_GAP;
-    text('Lives', firstLife - 12, 20, 28, PALETTE.text, 'right');
-    for (let life = 0; life < LIVES; life += 1) {
-      context.fillStyle = life < state.lives ? PALETTE.player : PALETTE.ground;
-      context.fillRect(firstLife + life * (LIFE_SIZE + LIFE_GAP), 24, LIFE_SIZE, LIFE_SIZE);
-    }
+  function basicHud(world) {
+    const state = world.state;
+    bar(24, 22, 176, 14, state.health, 100, PALETTE.danger);
+    bar(24, 42, 176, 12, state.armor, 100, '#7cc3e8');
+    text(`$${state.money}`, VIEW.width - 24, 42, 24, PALETTE.accent, 'right', 'bold');
+    text(world.city.districtAt(state.player.x, state.player.y), VIEW.width / 2, 40, 20, PALETTE.text, 'center');
+    context.fillStyle = 'rgba(10,20,28,0.62)';
+    context.fillRect(20, VIEW.height - 46, 430, 28);
+    text('WASD walk  Shift run  E car  Mouse aim/fire  Esc menu', 32, VIEW.height - 27, 14, PALETTE.muted);
   }
 
-  function drawPanel(title, lines, prompt) {
-    const height = PANEL.top + lines.length * PANEL.line + PANEL.bottom;
-    const x = (FIELD.width - PANEL.width) / 2;
-    const y = (FIELD.height - height) / 2;
+  function panel(title, options, selection, note) {
+    context.fillStyle = 'rgba(8,18,30,0.72)';
+    context.fillRect(0, 0, VIEW.width, VIEW.height);
+    const width = 520;
+    const height = 150 + options.length * 54 + (note ? 42 : 0);
+    const left = (VIEW.width - width) / 2;
+    const top = (VIEW.height - height) / 2;
     context.fillStyle = PALETTE.panel;
-    context.fillRect(x, y, PANEL.width, height);
-    context.textBaseline = 'alphabetic';
-    text(title, FIELD.width / 2, y + 78, 48, PALETTE.text, 'center');
-    for (let index = 0; index < lines.length; index += 1) {
-      text(lines[index], FIELD.width / 2, y + PANEL.top + index * PANEL.line, 22, PALETTE.muted, 'center');
+    context.fillRect(left, top, width, height);
+    context.strokeStyle = PALETTE.accent;
+    context.lineWidth = 2;
+    context.strokeRect(left, top, width, height);
+    text(title, VIEW.width / 2, top + 76, 52, PALETTE.accent, 'center', 'bold');
+    if (note) text(note, VIEW.width / 2, top + 110, 16, PALETTE.muted, 'center');
+    for (let index = 0; index < options.length; index += 1) {
+      const y = top + 142 + index * 54 + (note ? 34 : 0);
+      if (index === selection) {
+        context.fillStyle = 'rgba(242,181,68,0.2)';
+        context.fillRect(left + 38, y - 27, width - 76, 40);
+        context.fillStyle = PALETTE.accent;
+        context.fillRect(left + 38, y - 27, 4, 40);
+      }
+      text(options[index], left + 62, y, 22, index === selection ? PALETTE.text : PALETTE.muted);
     }
-    text(prompt, FIELD.width / 2, y + height - 40, 24, PALETTE.coin, 'center');
   }
 
-  const TITLE_LINES = ['Dodge the red blocks. Catch the gold coins.', 'Move with ← → or A D.  Pause with P.', ''];
-  const PAUSED_LINES = ['The blocks will wait for you.'];
-  const OVER_LINES = ['', ''];
+  function titleArt(clock) {
+    const gradient = context.createLinearGradient(0, 0, 0, VIEW.height);
+    gradient.addColorStop(0, '#183a5b');
+    gradient.addColorStop(0.5, '#d98a67');
+    gradient.addColorStop(1, '#f4c789');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, VIEW.width, VIEW.height);
+    context.fillStyle = 'rgba(255,236,180,0.75)';
+    context.beginPath();
+    context.arc(940, 268, 116, 0, Math.PI * 2);
+    context.fill();
+    context.fillStyle = 'rgba(23,48,62,0.55)';
+    for (let index = 0; index < 7; index += 1) {
+      const x = index * 210 - 60;
+      const height = 150 + (index % 3) * 70;
+      context.fillRect(x, VIEW.height - height - 90, 150, height);
+    }
+    context.fillStyle = 'rgba(12,34,46,0.8)';
+    context.fillRect(0, VIEW.height - 90, VIEW.width, 90);
+    context.strokeStyle = 'rgba(240,215,160,0.25)';
+    context.lineWidth = 4;
+    for (let index = 0; index < 3; index += 1) {
+      const y = VIEW.height - 66 + index * 22 + Math.sin(clock * 2 + index) * 4;
+      context.beginPath();
+      context.moveTo(0, y);
+      context.lineTo(VIEW.width, y);
+      context.stroke();
+    }
+  }
 
-  /** Paint one frame: the field, then the HUD or a panel for the screen the game is on. */
-  function draw(state, screen, best) {
+  function drawTitle(world, ui) {
+    titleArt(world.clock);
+    context.fillStyle = 'rgba(10,24,38,0.62)';
+    context.fillRect(0, 0, VIEW.width, VIEW.height);
+    text('SOLARA BAY', VIEW.width / 2, 258, 84, '#ffe0a0', 'center', 'bold');
+    text('An original sun-soaked crime city', VIEW.width / 2, 296, 20, '#d4e3e8', 'center');
+    panel('', TITLE_OPTIONS, ui.selection, 'Arrow keys to choose  ·  Enter to select');
+    text('v1.0  ·  No downloads, no network, all drawn live', VIEW.width / 2, VIEW.height - 18, 13, 'rgba(240,240,220,0.65)', 'center');
+  }
+
+  function drawDeathScreen(world) {
+    context.fillStyle = 'rgba(12,18,26,0.74)';
+    context.fillRect(0, 0, VIEW.width, VIEW.height);
+    text(world.state.busted ? 'BUSTED' : 'WASTED', VIEW.width / 2, VIEW.height / 2 - 10, 76, PALETTE.danger, 'center', 'bold');
+    text('Press Enter to respawn', VIEW.width / 2, VIEW.height / 2 + 44, 22, PALETTE.text, 'center');
+  }
+
+  function draw(world, camera, environment, screen, ui) {
     context.setTransform(1, 0, 0, 1, 0, 0);
-    context.fillStyle = PALETTE.backdrop;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
-    drawField(state);
+    context.fillStyle = environment.sky();
+    context.fillRect(0, 0, VIEW.width, VIEW.height);
+    context.save();
+    camera.apply(context);
+    drawCity(context, world.city, camera, environment);
+    for (const layer of worldLayers) layer(context, world, camera, environment);
+    drawEntities(context, world, environment);
+    context.restore();
+
     if (screen === SCREEN_TITLE) {
-      TITLE_LINES[2] = bestLabel(best);
-      drawPanel('Block Dodger', TITLE_LINES, 'Press Space or click to start');
+      drawTitle(world, ui);
+      if (world.systems.menu) world.systems.menu.draw(context, world, ui, screen);
       return;
     }
-    drawHud(state);
-    if (screen === SCREEN_PAUSED) drawPanel('Paused', PAUSED_LINES, 'Press P to resume');
-    else if (screen === SCREEN_OVER) {
-      OVER_LINES[0] = finalLabel(state.score);
-      OVER_LINES[1] = bestLabel(best);
-      drawPanel('Game over', OVER_LINES, 'Press Space or click to play again');
+    if (!world.systems.hud) basicHud(world);
+    for (const overlay of overlays) overlay(context, world, ui, screen);
+
+    if (screen === SCREEN_PAUSED && !world.systems.menu) {
+      panel('Paused', PAUSE_OPTIONS, ui.selection, 'Esc resumes the city');
+    } else if (screen === SCREEN_OVER) {
+      drawDeathScreen(world);
+    }
+    if (world.systems.menu && (screen === SCREEN_PAUSED || screen === SCREEN_OVER)) {
+      world.systems.menu.draw(context, world, ui, screen);
     }
   }
 
-  resize();
-  window.addEventListener('resize', resize);
-  return { draw };
+  return { draw, context, overlays, worldLayers, panel, text, bar, TITLE_OPTIONS, PAUSE_OPTIONS };
 }

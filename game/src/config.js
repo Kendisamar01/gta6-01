@@ -1,61 +1,71 @@
-// Every tuning number and colour in one place. The playfield is a fixed 1280x720 logical area;
-// the renderer scales it to the window, so no rule below depends on the screen size.
-
-export const FIELD = { width: 1280, height: 720, groundY: 664 };
-
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
+export const VIEW = { width: 1280, height: 720 };
 export const STEP = 1 / 60;
+export const MAX_FRAME = 0.25;
+
+export const WORLD = {
+  width: 6400,
+  height: 4800,
+  spacing: 320,
+  firstRoad: 160,
+  roadWidth: 72,
+  sidewalk: 18,
+  beachTop: 4160,
+  waterTop: 4480,
+};
 
 export const PLAYER = {
-  width: 72,
-  height: 24,
-  speed: 560,
-  invulnerable: 1.5,
+  radius: 16,
+  walkSpeed: 190,
+  runSpeed: 305,
+  health: 100,
+  armor: 100,
+  punchDamage: 14,
+  punchRange: 42,
+  respawnDelay: 2.4,
 };
 
-export const LIVES = 3;
+export const VEHICLE_TYPES = [
+  { id: 'sedan', name: 'Solace Sedan', top: 300, accel: 155, grip: 4.8, length: 78, width: 40, mass: 1, color: '#4f7fb8' },
+  { id: 'sport', name: 'Vesper GT', top: 430, accel: 250, grip: 5.6, length: 84, width: 40, mass: 0.9, color: '#d94c55' },
+  { id: 'taxi', name: 'Sunline Cab', top: 285, accel: 145, grip: 4.5, length: 82, width: 42, mass: 1.1, color: '#e5b63e' },
+  { id: 'van', name: 'Cargo Loaf', top: 245, accel: 120, grip: 3.9, length: 98, width: 46, mass: 1.5, color: '#a8b2bd' },
+  { id: 'truck', name: 'Haulmaster', top: 225, accel: 95, grip: 3.2, length: 124, width: 52, mass: 2.2, color: '#7c8b9e' },
+  { id: 'police', name: 'City Enforcer', top: 355, accel: 205, grip: 5.2, length: 86, width: 42, mass: 1.2, color: '#243a5e' },
+];
 
-export const BLOCK = {
-  minWidth: 40,
-  maxWidth: 110,
-  height: 36,
-  speed: 240,
-  speedPerLevel: 30,
-  speedJitter: 90,
-  interval: 0.55,
-  intervalScale: 0.88,
-  minInterval: 0.14,
-  dodgePoints: 1,
+export const WEAPONS = {
+  fists: { name: 'Fists', damage: 14, range: 44, ammo: Infinity, rate: 0.42, speed: 0 },
+  pistol: { name: 'P-9 Sidearm', damage: 28, range: 720, ammo: 12, rate: 0.19, speed: 1050 },
+  smg: { name: 'Tide SMG', damage: 18, range: 620, ammo: 32, rate: 0.085, speed: 980 },
 };
 
-export const COIN = {
-  size: 24,
-  speed: 190,
-  speedPerLevel: 14,
-  interval: 1.4,
-  intervalJitter: 0.8,
-  points: 10,
-};
-
-/** Seconds of play per level, and the last level: speeds and spawn rates stop growing there. */
-export const LEVEL = { seconds: 12, max: 12 };
-
-/** How many falling things can exist at once; the pool is allocated once, at boot. */
-export const POOL_SIZE = 64;
+export const DISTRICTS = [
+  { name: 'Downtown', color: '#3c5876' },
+  { name: 'Old Town', color: '#795d55' },
+  { name: 'Palmside', color: '#4f7a5d' },
+  { name: 'Marina', color: '#3c7181' },
+  { name: 'Industrial', color: '#77706a' },
+  { name: 'Suburbs', color: '#8a815f' },
+  { name: 'Sunstrand Beach', color: '#c8a875' },
+];
 
 export const PALETTE = {
-  backdrop: '#11141b',
-  sky: '#1b1f2a',
-  ground: '#2a3040',
-  player: '#4fc3f7',
-  block: '#e5534b',
-  coin: '#f2c94c',
-  panel: '#252b38',
-  text: '#eef1f5',
-  muted: '#8b93a3',
+  land: '#c8b995',
+  road: '#40454c',
+  roadLine: '#d9d2b0',
+  walk: '#a8a087',
+  water: '#1c7895',
+  waterDeep: '#125c7a',
+  foam: '#e9f6ef',
+  ink: '#14202c',
+  text: '#f6f3e8',
+  muted: '#aab8c4',
+  accent: '#f2b544',
+  danger: '#e35b4f',
+  good: '#6dd49a',
+  panel: 'rgba(14, 24, 36, 0.9)',
 };
 
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
-
-/** Where the best score is kept between visits (this browser only). */
-export const BEST_KEY = 'block-dodger.best';
+export const FONT = '"Trebuchet MS", "Segoe UI", sans-serif';
+export const SAVE_KEY = 'solara-bay.save.v1';
+export const BEST_KEY = 'solara-bay.best.v1';
